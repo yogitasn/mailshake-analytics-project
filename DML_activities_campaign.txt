@@ -1,0 +1,417 @@
+DROP TABLE IF EXISTS mailshake.public.campaign_data_staging;
+CREATE TABLE mailshake.public.campaign_data_staging  (
+    object VARCHAR(65535),
+    id BIGINT,
+    title VARCHAR(65535),
+    created VARCHAR(65535),
+    isArchived BOOLEAN,
+    isPaused BOOLEAN,
+    wizardStatus VARCHAR(65535),
+    url VARCHAR(65535),
+    sender_object VARCHAR(65535),
+    sender_id VARCHAR(65535),
+    sender_emailAddress VARCHAR(65535),
+    sender_fromName VARCHAR(65535),
+    sender_created VARCHAR(65535),
+    message_id BIGINT,
+    message_isPaused BOOLEAN,
+    message_object VARCHAR(65535),
+    message_replyToID BIGINT,
+    message_subject VARCHAR(65535),
+    message_type VARCHAR(65535),
+    processing_timestamp TIMESTAMP,
+    load_type VARCHAR(65535),
+    processing_date DATE
+
+)
+DISTSTYLE AUTO
+SORTKEY (id, message_id);
+
+COPY mailshake.public.campaign_data
+FROM 's3://mailshake-analytics/curated/campaign/date=2025-12-23/'
+IAM_ROLE 'arn:aws:iam::975050241801:role/MailshakeRedshiftS3'
+FORMAT AS PARQUET;
+
+
+-- activity_open
+DROP TABLE IF EXISTS public.activity_open_staging;
+CREATE TABLE public.activity_open_staging (
+    object                     VARCHAR(65535),
+    id                         BIGINT,
+    actiondate                 VARCHAR(65535),
+    isduplicate                BOOLEAN,
+    
+    recipient_object           VARCHAR(65535),
+    recipient_id               BIGINT,
+    recipient_emailaddress     VARCHAR(65535),
+    recipient_fullname         VARCHAR(65535),
+    recipient_created          VARCHAR(65535),
+    recipient_ispaused         BOOLEAN,
+    recipient_contactid        BIGINT,
+    recipient_first            VARCHAR(65535),
+    recipient_last             VARCHAR(65535),
+    recipient_fields_link      VARCHAR(65535),
+    recipient_fields_status    VARCHAR(65535),
+    recipient_fields_first     VARCHAR(65535),
+    recipient_fields_position  VARCHAR(65535),
+    recipient_fields_date_applied VARCHAR(65535),
+    recipient_fields_account   VARCHAR(65535),
+    recipient_fields_phonenumber VARCHAR(65535),
+    recipient_fields_facebookurl VARCHAR(65535),
+    recipient_fields_instagramid VARCHAR(65535),
+    recipient_fields_linkedinurl VARCHAR(65535),
+    recipient_fields_twitterid VARCHAR(65535),
+    
+    campaign_object            VARCHAR(65535),
+    campaign_id                BIGINT,
+    campaign_title             VARCHAR(65535),
+    campaign_wizardstatus      INTEGER,
+    
+    parent_object              VARCHAR(65535),
+    parent_id                  BIGINT,
+    parent_type                VARCHAR(65535),
+    parent_message_object      VARCHAR(65535),
+    parent_message_id          BIGINT,
+    parent_message_type        VARCHAR(65535),
+    parent_message_subject     VARCHAR(65535),
+    parent_message_replytoid   DOUBLE PRECISION,
+    
+    client_id_col              VARCHAR(65535),
+    source_date_col            VARCHAR(65535),
+    processing_timestamp       TIMESTAMP,
+    processing_date            DATE,
+    load_type                  VARCHAR(65535)
+)
+DISTSTYLE AUTO
+SORTKEY (source_date_col, processing_date);
+ 
+DROP TABLE IF EXISTS public.activity_reply_staging
+CREATE TABLE IF NOT EXISTS public.activity_reply_staging (
+    object                          VARCHAR(256),
+    id                              BIGINT,
+    actiondate                      VARCHAR(64),
+    type                            VARCHAR(128),
+    subject                         VARCHAR(1024),
+    externalid                      VARCHAR(256),
+    externalrawmessageid            VARCHAR(256),
+    externalconversationid          VARCHAR(256),
+
+    rawbody                         VARCHAR(MAX),
+    body                            VARCHAR(MAX),
+    plaintextbody                   VARCHAR(MAX),
+
+    recipient_object                VARCHAR(128),
+    recipient_id                    BIGINT,
+    recipient_emailaddress          VARCHAR(256),
+    recipient_fullname              VARCHAR(256),
+    recipient_created               VARCHAR(64),
+    recipient_ispaused              BOOLEAN,
+    recipient_contactid             BIGINT,
+    recipient_first                 VARCHAR(128),
+    recipient_last                  VARCHAR(128),
+
+    recipient_fields_link            VARCHAR(512),
+    recipient_fields_status          VARCHAR(128),
+    recipient_fields_first           VARCHAR(128),
+    recipient_fields_position        VARCHAR(256),
+    recipient_fields_date_applied    VARCHAR(64),
+    recipient_fields_account         VARCHAR(256),
+    recipient_fields_phonenumber     VARCHAR(64),
+    recipient_fields_facebookurl     VARCHAR(512),
+    recipient_fields_instagramid     VARCHAR(256),
+    recipient_fields_linkedinurl     VARCHAR(512),
+    recipient_fields_twitterid       VARCHAR(256),
+
+    campaign_object                 VARCHAR(128),
+    campaign_id                     BIGINT,
+    campaign_title                  VARCHAR(512),
+    campaign_wizardstatus            INTEGER,
+
+    parent_object                   VARCHAR(128),
+    parent_id                       BIGINT,
+    parent_type                     VARCHAR(128),
+
+    parent_message_object            VARCHAR(128),
+    parent_message_id                BIGINT,
+    parent_message_type              VARCHAR(128),
+    parent_message_subject           VARCHAR(1024),
+    parent_message_replytoid         DOUBLE PRECISION,
+
+    from_object                     VARCHAR(128),
+    from_address                    VARCHAR(256),
+    from_fullname                   INTEGER,
+    from_first                      VARCHAR(128),
+    from_last                       VARCHAR(128),
+
+    client_id_col                   VARCHAR(128),
+    source_date_col                 VARCHAR(32),
+
+    processing_timestamp            TIMESTAMP,
+    processing_date                 DATE,
+    load_type                       VARCHAR(32)
+)
+DISTSTYLE AUTO
+SORTKEY (processing_date, client_id_col);
+
+DROP TABLE IF EXISTS public.activity_sent_staging 
+CREATE TABLE IF NOT EXISTS public.activity_sent_staging (
+    object                          VARCHAR(256),
+    id                              BIGINT,
+    actiondate                      VARCHAR(64),
+    type                            VARCHAR(128),
+
+    excludebody                     BOOLEAN,
+
+    to_address                      VARCHAR(256),
+    to_first                        VARCHAR(128),
+    to_fullname                     INTEGER,
+    to_last                         VARCHAR(128),
+    to_object                       VARCHAR(128),
+
+    subject                         VARCHAR(1024),
+    externalid                      VARCHAR(256),
+    externalrawmessageid            VARCHAR(256),
+    externalconversationid          VARCHAR(256),
+
+    rawbody                         VARCHAR(MAX),
+    body                            VARCHAR(MAX),
+    plaintextbody                   VARCHAR(MAX),
+
+    recipient_object                VARCHAR(128),
+    recipient_id                    BIGINT,
+    recipient_emailaddress          VARCHAR(256),
+    recipient_fullname              VARCHAR(256),
+    recipient_created               VARCHAR(64),
+    recipient_ispaused              BOOLEAN,
+    recipient_first                 VARCHAR(128),
+    recipient_last                  VARCHAR(128),
+
+    recipient_fields_account         VARCHAR(256),
+    recipient_fields_phonenumber     VARCHAR(64),
+    recipient_fields_facebookurl     VARCHAR(512),
+    recipient_fields_instagramid     VARCHAR(256),
+    recipient_fields_linkedinurl     VARCHAR(512),
+    recipient_fields_twitterid       VARCHAR(256),
+    recipient_fields_link            VARCHAR(512),
+    recipient_fields_position        VARCHAR(256),
+    recipient_fields_date_applied    VARCHAR(64),
+    recipient_fields_status          VARCHAR(128),
+
+    campaign_object                 VARCHAR(128),
+    campaign_id                     BIGINT,
+    campaign_title                  VARCHAR(512),
+    campaign_wizardstatus            INTEGER,
+
+    message_object                  VARCHAR(128),
+    message_id                      BIGINT,
+    message_type                    VARCHAR(128),
+    message_subject                 VARCHAR(1024),
+    message_replytoid               DOUBLE PRECISION,
+
+    from_object                     VARCHAR(128),
+    from_address                    VARCHAR(256),
+    from_fullname                   VARCHAR(256),
+    from_first                      VARCHAR(128),
+    from_last                       VARCHAR(128),
+
+    client_id_col                   VARCHAR(128),
+    source_date_col                 VARCHAR(32),
+
+    processing_timestamp            TIMESTAMP,
+    processing_date                 DATE,
+    load_type                       VARCHAR(32)
+)
+DISTSTYLE AUTO
+SORTKEY (processing_date, client_id_col);
+
+INSERT INTO public.activity_sent_event (
+    object,
+    id,
+    actiondate,
+    type,
+    excludebody,
+    to_address,
+    to_first,
+    to_fullname,
+    to_last,
+    to_object,
+    subject,
+    externalid,
+    externalrawmessageid,
+    externalconversationid,
+    rawbody,
+    body,
+    plaintextbody,
+    recipient_object,
+    recipient_id,
+    recipient_emailaddress,
+    recipient_fullname,
+    recipient_created,
+    recipient_ispaused,
+    recipient_first,
+    recipient_last,
+    recipient_fields_account,
+    recipient_fields_phonenumber,
+    recipient_fields_facebookurl,
+    recipient_fields_instagramid,
+    recipient_fields_linkedinurl,
+    recipient_fields_twitterid,
+    recipient_fields_link,
+    recipient_fields_position,
+    recipient_fields_date_applied,
+    recipient_fields_status,
+    campaign_object,
+    campaign_id,
+    campaign_title,
+    campaign_wizardstatus,
+    message_object,
+    message_id,
+    message_type,
+    message_subject,
+    message_replytoid,
+    from_object,
+    from_address,
+    from_fullname,
+    from_first,
+    from_last,
+    client_id_col,
+    source_date_col,
+    processing_timestamp,
+    processing_date,
+    load_type
+)
+SELECT
+    object,
+    id,
+    actiondate,
+    type,
+    excludebody,
+    to_address,
+    to_first,
+    to_fullname,
+    to_last,
+    to_object,
+    subject,
+    externalid,
+    externalrawmessageid,
+    externalconversationid,
+    rawbody,
+    body,
+    plaintextbody,
+    recipient_object,
+    recipient_id,
+    recipient_emailaddress,
+    recipient_fullname,
+    recipient_created,
+    recipient_ispaused,
+    recipient_first,
+    recipient_last,
+    recipient_fields_account,
+    recipient_fields_phonenumber,
+    recipient_fields_facebookurl,
+    recipient_fields_instagramid,
+    recipient_fields_linkedinurl,
+    recipient_fields_twitterid,
+    recipient_fields_link,
+    recipient_fields_position,
+    recipient_fields_date_applied,
+    recipient_fields_status,
+    campaign_object,
+    campaign_id,
+    campaign_title,
+    campaign_wizardstatus,
+    message_object,
+    message_id,
+    message_type,
+    message_subject,
+    CAST(message_replytoid AS DOUBLE PRECISION) AS message_replytoid,
+    from_object,
+    from_address,
+    from_fullname,
+    from_first,
+    from_last,
+    'client_3' AS client_id_col,
+    '2025-12-25' AS source_date_col,
+    CURRENT_TIMESTAMP AS processing_timestamp,
+    CURRENT_DATE AS processing_date,
+    'single_date' AS load_type
+FROM
+    public.activity_sent_staging
+
+DROP TABLE IF EXISTS public.activity_created_leads_staging
+CREATE TABLE IF NOT EXISTS public.activity_created_leads_staging (
+    object                          VARCHAR(256),
+    id                              BIGINT,
+    created                         VARCHAR(64),
+    openeddate                      VARCHAR(64),
+    laststatuschangedate            INTEGER,
+    annotation                       INTEGER,
+    status                           VARCHAR(128),
+
+    recipient_object                 VARCHAR(128),
+    recipient_id                     BIGINT,
+    recipient_emailaddress           VARCHAR(256),
+    recipient_fullname               VARCHAR(256),
+    recipient_created                VARCHAR(64),
+    recipient_ispaused               BOOLEAN,
+    recipient_contactid              BIGINT,
+    recipient_first                  VARCHAR(128),
+    recipient_last                   VARCHAR(128),
+
+    recipient_fields_link            VARCHAR(1500),
+    recipient_fields_first           VARCHAR(128),
+    recipient_fields_status          VARCHAR(128),
+    recipient_fields_position        VARCHAR(256),
+    recipient_fields_date_applied    VARCHAR(64),
+    recipient_fields_account         VARCHAR(256),
+    recipient_fields_phonenumber     VARCHAR(64),
+    recipient_fields_facebookurl     VARCHAR(512),
+    recipient_fields_instagramid     VARCHAR(256),
+    recipient_fields_linkedinurl     VARCHAR(512),
+    recipient_fields_twitterid       VARCHAR(256),
+
+    campaign_object                  VARCHAR(128),
+    campaign_id                      BIGINT,
+    campaign_title                   VARCHAR(512),
+    campaign_wizardstatus            INTEGER,
+
+    assignedto_object                VARCHAR(128),
+    assignedto_id                    DOUBLE PRECISION,
+    assignedto_emailaddress          VARCHAR(256),
+    assignedto_fullname              VARCHAR(256),
+    assignedto_first                 VARCHAR(128),
+    assignedto_last                  VARCHAR(128),
+
+    client_id_col                    VARCHAR(128),
+    source_date_col                  VARCHAR(32),
+    processing_timestamp             TIMESTAMP,
+    processing_date                  DATE,
+    load_type                        VARCHAR(32)
+)
+DISTSTYLE AUTO
+SORTKEY (processing_date, client_id_col);
+
+
+SELECT * FROM mailshake.public.campaign_data;
+DROP TABLE IF EXISTS mailshake.public.campaign_data
+CREATE TABLE mailshake.public.campaign_data AS SELECT * FROM mailshake.public.campaign_data_staging
+
+DROP TABLE IF EXISTS public.activity_open_event;
+CREATE TABLE mailshake.public.activity_open_event AS SELECT * FROM mailshake.public.activity_open_staging
+
+DROP TABLE IF EXISTS public.activity_reply_event;
+CREATE TABLE mailshake.public.activity_reply_event AS SELECT * FROM mailshake.public.activity_reply_staging
+
+DROP TABLE IF EXISTS public.activity_sent_event;
+CREATE TABLE mailshake.public.activity_sent_event AS SELECT * FROM mailshake.public.activity_sent_staging
+
+DROP TABLE IF EXISTS public.activity_createdleads_event;
+CREATE TABLE mailshake.public.activity_createdleads_event AS SELECT * FROM mailshake.public.activity_created_leads_staging
+
+
+SELECT * FROM public.activity_open_event;
+
+SELECT * FROM public.activity_reply_event;
+
+
+SELECT * FROM mailshake.public.campaign_data

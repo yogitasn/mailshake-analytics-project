@@ -1,0 +1,176 @@
+CREATE OR REPLACE PROCEDURE public.refresh_data_safe(
+    p_load_date DATE,
+    p_entity VARCHAR(256),
+    p_target_table VARCHAR(256),
+    p_staging_table VARCHAR(256)
+)
+AS $$
+DECLARE
+    v_client_id VARCHAR(256);
+    v_s3_path TEXT;
+    v_rows_copied INT;
+    v_offset INT := 0;
+    v_total INT := 0;
+    v_client_num INT;
+BEGIN
+    -- Client list
+    DROP TABLE IF EXISTS client_list;
+    CREATE TEMP TABLE client_list (client_id VARCHAR(256));
+
+    INSERT INTO client_list
+    SELECT 'client_1'
+    UNION ALL SELECT 'client_2'
+    UNION ALL SELECT 'client_3';
+
+    SELECT COUNT(*) INTO v_total FROM client_list;
+
+    RAISE INFO 'Starting refresh for % clients', v_total;
+
+    -- Delete old data
+    BEGIN
+        EXECUTE
+            'DELETE FROM ' || p_target_table ||
+            ' WHERE processing_date = ''' || p_load_date || '''';
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'Delete failed: %', SQLERRM;
+    END;
+
+    -- OFFSET loop (Redshift-safe)
+    WHILE v_offset < v_total LOOP
+
+        -- client number for logging
+        v_client_num := v_offset + 1;
+
+        SELECT client_id
+        INTO v_client_id
+        FROM client_list
+        ORDER BY client_id
+        LIMIT 1 OFFSET v_offset;
+
+        RAISE INFO '========================================';
+        RAISE INFO 'Processing client % (% of %)',
+                   v_client_id, v_client_num, v_total;
+
+        BEGIN
+            -- Truncate staging
+            EXECUTE 'TRUNCATE TABLE ' || p_staging_table;
+
+            -- Build S3 path
+            v_s3_path :=
+                's3://mailshake-analytics/curated/entity=' || p_entity ||
+                '/client_id=' || v_client_id ||
+                '/source_date=' || p_load_date || '/';
+
+            -- COPY
+            BEGIN
+                EXECUTE
+                    'COPY ' || p_staging_table ||
+                    ' FROM ''' || v_s3_path || ''' ' ||
+                    'IAM_ROLE ''arn:aws:iam::975050241801:role/MailshakeRedshiftS3'' ' ||
+                    'FORMAT AS PARQUET';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RAISE WARNING 'COPY FAILED for client %: %',
+                                   v_client_id, SQLERRM;
+                    v_offset := v_offset + 1;
+                    CONTINUE;
+            END;
+
+            -- Count rows
+            EXECUTE
+                'SELECT COUNT(*) FROM ' || p_staging_table
+            INTO v_rows_copied;
+
+            IF v_rows_copied > 0 THEN
+                EXECUTE
+                    'INSERT INTO ' || p_target_table ||
+                    ' SELECT * FROM ' || p_staging_table;
+                RAISE INFO 'Inserted % rows for client %',
+                           v_rows_copied, v_client_id;
+            ELSE
+                RAISE WARNING 'No data for client %', v_client_id;
+            END IF;
+
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Client % failed: %',
+                               v_client_id, SQLERRM;
+        END;
+
+        -- ALWAYS increment offset
+        v_offset := v_offset + 1;
+
+    END LOOP;
+
+    RAISE INFO '========================================';
+    RAISE INFO 'refresh_data_safe completed successfully';
+
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- For recipient data
+CALL public.refresh_data_safe(
+    '2025-12-25',
+    'activity_open',
+    'public.activity_open_event',
+    'public.activity_open_staging'
+);
+
+
+CALL public.refresh_data_safe(
+    '2025-12-25',
+    'activity_reply',
+    'public.activity_reply_event',
+    'public.activity_reply_staging'
+);
+
+CALL public.refresh_data_safe(
+    '2025-12-25',
+    'activity_sent',
+    'public.activity_sent_event',
+    'public.activity_sent_staging'
+);
+
+CALL public.refresh_data_safe(
+    '2025-12-25',
+    'created_leads',
+    'public.activity_createdleads_event',
+    'public.activity_created_leads_staging'
+);
+
+SELECT * FROM public.activity_open_event;
+
+SELECT client_id_col, COUNT(*)
+FROM public.activity_open_event
+GROUP BY client_id_col;
+
+SELECT client_id_col, COUNT(*)
+FROM public.activity_reply_event
+GROUP BY client_id_col;
+
+SELECT client_id_col, COUNT(*)
+FROM public.activity_sent_event
+GROUP BY client_id_col;
+
+SELECT client_id_col, COUNT(*)
+FROM public.activity_createdleads_event
+GROUP BY client_id_col;
+
+
+
+
+
+-- Test 1: Try copying client_1 data directly
+TRUNCATE TABLE public.activity_created_leads_staging ;
+
+TRUNCATE TABLE public.activity_createdleads_event;
+
+
+COPY public.activity_created_leads_staging 
+FROM 's3://mailshake-analytics/curated/entity=created_leads/client_id=client_2/source_date=2025-12-25/'
+IAM_ROLE 'arn:aws:iam::975050241801:role/MailshakeRedshiftS3'
+FORMAT AS PARQUET;
+
+SELECT * FROM public.activity_open_staging ;

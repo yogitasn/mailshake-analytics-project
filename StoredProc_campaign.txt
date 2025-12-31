@@ -1,0 +1,85 @@
+CREATE OR REPLACE PROCEDURE public.refresh_campaign_data(p_load_date DATE)
+AS $$
+DECLARE
+    v_client_id VARCHAR(256);
+    v_copy_cmd VARCHAR(MAX);
+    v_delete_cmd VARCHAR(MAX);
+    v_insert_cmd VARCHAR(MAX);
+    v_s3_path VARCHAR(MAX);
+    v_counter INT := 0;
+    v_total INT := 0;
+BEGIN
+    -- Drop and create temporary table for clients
+    DROP TABLE IF EXISTS client_list;
+    CREATE TEMP TABLE client_list (
+        client_id VARCHAR(256),
+        row_num INT
+    );
+    
+    -- Insert client IDs with row numbers
+    INSERT INTO client_list (client_id, row_num) 
+    SELECT client_id, ROW_NUMBER() OVER (ORDER BY client_id) as row_num
+    FROM (
+        SELECT 'client_1' as client_id
+        UNION ALL SELECT 'client_2'
+        UNION ALL SELECT 'client_3'
+    );
+    
+    -- Get total count
+    SELECT COUNT(*) INTO v_total FROM client_list;
+    
+    -- Loop through clients by row number
+    v_counter := 1;
+    WHILE v_counter <= v_total LOOP
+        -- Get client_id for current counter
+        SELECT client_id INTO v_client_id 
+        FROM client_list 
+        WHERE row_num = v_counter;
+        
+        -- Print before running any command
+        RAISE INFO 'Processing client: %', v_client_id;
+        
+        -- 1. Clear staging table
+        TRUNCATE TABLE public.campaign_data_staging;
+        
+        -- 2. Build S3 path
+        v_s3_path := 's3://mailshake-analytics/curated/entity=campaign/client_id=' 
+                     || v_client_id || '/source_date=' || p_load_date || '/';
+        
+        -- 3. Prepare and execute COPY command
+        v_copy_cmd := 
+            'COPY public.campaign_data_staging ' ||
+            'FROM ''' || v_s3_path || ''' ' ||
+            'IAM_ROLE ''arn:aws:iam::975050241801:role/MailshakeRedshiftS3'' ' ||
+            'FORMAT AS PARQUET';
+        
+        RAISE INFO 'Executing COPY from: %', v_s3_path;
+        EXECUTE v_copy_cmd;
+        
+        -- 4. Delete existing data for this date
+        v_delete_cmd := 
+            'DELETE FROM public.campaign_data ' ||
+            'WHERE processing_date = ''' || p_load_date || '''';
+        
+        RAISE INFO 'Deleting existing data for date: %', p_load_date;
+        EXECUTE v_delete_cmd;
+        
+        -- 5. Insert new data
+        v_insert_cmd := 'INSERT INTO public.campaign_data SELECT * FROM public.campaign_data_staging';
+        
+        RAISE INFO 'Inserting data for client: %', v_client_id;
+        EXECUTE v_insert_cmd;
+        
+        RAISE INFO 'Successfully loaded client % for date %', v_client_id, p_load_date;
+        
+        -- Increment counter
+        v_counter := v_counter + 1;
+    END LOOP;
+    
+    RAISE INFO 'Completed refresh_campaign_data for date %', p_load_date;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE EXCEPTION 'Error in refresh_campaign_data: %', SQLERRM;
+END;
+$$ LANGUAGE plpgsql;
