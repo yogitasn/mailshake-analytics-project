@@ -13,3 +13,42 @@ TLDR: I'm not reading that article
 
 
 To be updated ...
+
+Metrics:
+
+Per client count of sent, opened and replied messages.
+
+`SELECT
+    COUNT(DISTINCT st.message_id) as total_sent_messages,
+    COUNT(DISTINCT op.parent_message_id) AS count_opened_messages,
+    COUNT(DISTINCT rp.parent_message_id) AS count_replied_messages,
+    st.client_id_col
+FROM activity_sent_event st
+LEFT JOIN activity_open_event op
+    ON st.message_id = op.parent_message_id
+AND st.client_id_col = op.client_id_col
+LEFT JOIN activity_reply_event rp 
+   ON st.message_id = rp.parent_message_id
+AND st.client_id_col = rp.client_id_col
+GROUP BY st.client_id_col
+`
+![alt text](image.png)
+
+Per campaign count of sent , opened and replied messages
+
+`SELECT
+    COUNT(DISTINCT st.message_id) as total_sent_messages,
+    COUNT(DISTINCT op.campaign_id) AS count_opened_messages,
+    COUNT(DISTINCT rp.campaign_id) AS count_replied_messages,
+    st.campaign_id, st.client_id_col
+FROM activity_sent_event st
+LEFT JOIN activity_open_event op
+    ON st.message_id = op.parent_message_id
+    AND st.client_id_col = op.client_id_col
+LEFT JOIN activity_reply_event rp 
+    ON st.message_id = rp.parent_message_id
+    AND st.client_id_col = op.client_id_col
+GROUP BY st.campaign_id, st.client_id_col
+ORDER BY client_id_col;
+`
+![alt text](image-1.png)
