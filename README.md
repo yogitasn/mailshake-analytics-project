@@ -14,6 +14,7 @@ TLDR: I'm not reading that article
 
 Run the below docker command to spin up jupyter notebook to run the pyspark scripts/notebook.
 `
+
 docker run -d --name spark-jupyter ^
   -p 8888:8888 ^
   -p 4040:4040 ^
@@ -23,27 +24,28 @@ docker run -d --name spark-jupyter ^
   spark-jupyter
 `
 
+
 A jupyter notebook will open on successful execution of the above command.
 
 Execute the `DataIngestion.ipynb` script and ingest the data from Mailshake API for the different clients. The data is stored in the below format i.e. snapshot and event-date. 
 
-![alt text](Images\image-2.png)
+![alt text](Images/image-2.png)
 
 Snapshot data is stored below 
 
-![alt text](Images\image-3.png)
+![alt text](Images/image-3.png)
 
 Incremental data is stored in the event folders. 
 
-![alt text](Images\image-4.png)
+![alt text](Images/image-4.png)
 
 The incremental processing happens with the help of watermark stored 
-![alt text](Images\image-6.png)
+![alt text](Images/image-6.png)
 
 
 The data is raw format will be processed by the  `Data transformation script` and saved in curated format
 
-![alt text](Images\image-5.png)
+![alt text](Images/image-5.png)
 
 Metrics:
 
@@ -63,7 +65,7 @@ LEFT JOIN activity_reply_event rp
 AND st.client_id_col = rp.client_id_col
 GROUP BY st.client_id_col
 `
-![alt text](Images\.png)
+![alt text](Images/image.png)
 
 Per campaign count of sent , opened and replied messages
 
@@ -82,4 +84,4 @@ LEFT JOIN activity_reply_event rp
 GROUP BY st.campaign_id, st.client_id_col
 ORDER BY client_id_col;
 `
-![alt text](Images\image-1.png)
+![alt text](Images/image-1.png)
