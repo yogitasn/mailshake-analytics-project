@@ -13,16 +13,14 @@ TLDR: I'm not reading that article
 
 
 Run the below docker command to spin up jupyter notebook to run the pyspark scripts/notebook.
-`
 
-docker run -d --name spark-jupyter ^
+`docker run -d --name spark-jupyter ^
   -p 8888:8888 ^
   -p 4040:4040 ^
   -v %cd%:/opt/spark/work-dir ^
   -e AWS_ACCESS_KEY_ID=<AWS_ACCESS_KEY_ID> ^
   -e AWS_SECRET_ACCESS_KEY=<AWS_SECRET_ACCESS_KEY> ^
-  spark-jupyter
-`
+  spark-jupyter`
 
 
 A jupyter notebook will open on successful execution of the above command.
