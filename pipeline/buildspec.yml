@@ -1,0 +1,41 @@
+version: 0.2
+
+env:
+  variables:
+    S3_BUCKET: "mailshake-glue-scripts-dev"
+    S3_PATH: "glue_jobs"
+    # FORMAT: glueJobName:scriptFile.py,glueJobName2:scriptFile2.py
+    MAPPINGS: "Mailshake_ingestion_job:job_ingest.py,Mailshake_transformation_job:job_transform.py"
+
+phases:
+  install:
+    commands:
+      - echo "Installing AWS CLI..."
+      - pip install --upgrade awscli
+      - echo "Installing Python dependencies..."
+      - pip install -r requirements.txt
+
+  pre_build:
+    commands:
+      - echo "Validating Python scripts..."
+      - python -m py_compile glue_jobs/*.py
+
+  build:
+    commands:
+      - echo "Uploading scripts to S3..."
+      - aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/
+      - echo "S3 sync completed."
+
+  post_build:
+    commands:
+      - echo "Updating Glue Jobs with new script paths..."
+      - |
+        for pair in $(echo $MAPPINGS | tr ',' ' '); do
+          job="${pair%%:*}"
+          script="${pair##*:}"
+          echo "Updating Glue Job: $job with script: $script"
+          aws glue update-job \
+            --job-name "$job" \
+            --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/$script\",\"PythonVersion\":\"3\"}}"
+        done
+      - echo "Glue Jobs updated successfully."
