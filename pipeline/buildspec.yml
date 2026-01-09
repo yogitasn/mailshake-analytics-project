@@ -4,7 +4,6 @@ env:
   variables:
     S3_BUCKET: "mailshake-glue-scripts-dev"
     S3_PATH: "glue_jobs"
-    # FORMAT: glueJobName:scriptFile.py,glueJobName2:scriptFile2.py
     MAPPINGS: "Mailshake_ingestion_job:job_ingest.py,Mailshake_transformation_job:job_transform.py"
 
 phases:
@@ -22,15 +21,19 @@ phases:
 
   build:
     commands:
-      - echo "Uploading scripts to S3..."
+      - echo "Uploading Python scripts to S3..."
       - aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/
       - echo "S3 sync completed."
 
   post_build:
     commands:
-      - echo "Updating Glue Jobs with new script paths..."
+      - echo "Debug: MAPPINGS variable is '$MAPPINGS'"
+      - echo "Updating Glue Jobs with new scripts..."
       - |
-        for pair in $(echo $MAPPINGS | tr ',' ' '); do
+        # Split MAPPINGS by comma into array
+        IFS=',' read -ra pairs <<< "$MAPPINGS"
+        for pair in "${pairs[@]}"; do
+          # Split each pair by colon into job name and script
           job="${pair%%:*}"
           script="${pair##*:}"
           echo "Updating Glue Job: $job with script: $script"
@@ -38,4 +41,9 @@ phases:
             --job-name "$job" \
             --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/$script\",\"PythonVersion\":\"3\"}}"
         done
-      - echo "Glue Jobs updated successfully."
+      - echo "All Glue jobs updated successfully."
+
+# Artifacts are not needed for Glue deployment
+artifacts:
+  files:
+    - "**/*"
