@@ -4,42 +4,45 @@ env:
   variables:
     S3_BUCKET: "mailshake-glue-scripts-dev"
     S3_PATH: "glue_jobs"
+    # Format: glueJobName:scriptFile.py,glueJobName2:scriptFile2.py
     MAPPINGS: "Mailshake_ingestion_job:job_ingest.py,Mailshake_transformation_job:job_transform.py"
 
 phases:
   install:
+    runtime-versions:
+      python: 3.11
     commands:
       - echo "===== INSTALL PHASE ====="
       - echo "Installing AWS CLI..."
       - pip install --upgrade awscli
-      - echo "Installing Python dependencies (if requirements.txt exists)..."
+      - echo "Installing Python dependencies..."
       - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - echo "Python dependencies installed."
+      - python --version
+      - pip --version
 
   pre_build:
     commands:
       - echo "===== PRE_BUILD PHASE ====="
-      - echo "Current working directory: $(pwd)"
-      - echo "Listing all files at repo root:"
+      - echo "Current directory: $(pwd)"
+      - echo "Listing files at repo root:"
       - ls -l
       - echo "Listing glue_jobs folder contents:"
       - ls -l glue_jobs/
+      - echo "Validating Python scripts..."
       - python -m py_compile glue_jobs/*.py
 
   build:
     commands:
       - echo "===== BUILD PHASE ====="
-      - echo "Syncing glue_jobs/ to S3..."
-      - if [ -d glue_jobs ]; then aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/; else echo "Skipping S3 sync, glue_jobs folder not found."; fi
-      - echo "S3 sync completed."
-      - echo "Verifying files in S3 bucket:"
+      - echo "Syncing Python scripts to S3..."
+      - aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/
+      - echo "S3 sync completed. Listing bucket contents:"
       - aws s3 ls s3://$S3_BUCKET/$S3_PATH/
 
   post_build:
     commands:
       - echo "===== POST_BUILD PHASE ====="
       - echo "Debug: MAPPINGS variable = '$MAPPINGS'"
-      - echo "Updating Glue jobs..."
       - |
         IFS=',' read -ra pairs <<< "$MAPPINGS"
         for pair in "${pairs[@]}"; do
