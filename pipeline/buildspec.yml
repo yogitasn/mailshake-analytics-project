@@ -23,9 +23,8 @@ phases:
       - echo "Listing all files at repo root:"
       - ls -l
       - echo "Listing glue_jobs folder contents:"
-      - if [ -d glue_jobs ]; then ls -l glue_jobs/; else echo "glue_jobs folder not found!"; fi
-      - echo "Validating Python scripts in glue_jobs..."
-      - python -m py_compile glue_jobs/*.py || echo "Python compilation errors detected!"
+      - ls -l glue_jobs/
+      - python -m py_compile glue_jobs/*.py
 
   build:
     commands:
