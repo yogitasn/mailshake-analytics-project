@@ -43,8 +43,9 @@ phases:
     commands:
       - echo "===== POST_BUILD PHASE ====="
       - echo "Debug: MAPPINGS variable = '$MAPPINGS'"
-      - "IFS=',' read -ra pairs <<< \"$MAPPINGS\"; for pair in \"\${pairs[@]}\"; do job=\"\${pair%%:*}\"; script=\"\${pair##*:}\"; echo \"Updating Glue Job: \$job with script: \$script\"; aws glue update-job --job-name \"\$job\" --job-update '{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/\$script\",\"PythonVersion\":\"3\"}}'; done"
+      - 'IFS="," read -ra pairs <<< "$MAPPINGS"; for pair in "${pairs[@]}"; do job="${pair%%:*}"; script="${pair##*:}"; echo "Updating Glue Job: $job with script: $script"; aws glue update-job --job-name "$job" --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/$script\",\"PythonVersion\":\"3\"}}"; done'
       - echo "All Glue jobs updated successfully."
+
 
 
 artifacts:
