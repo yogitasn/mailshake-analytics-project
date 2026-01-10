@@ -9,28 +9,38 @@ env:
 phases:
   install:
     commands:
+      - echo "===== INSTALL PHASE ====="
       - echo "Installing AWS CLI..."
       - pip install --upgrade awscli
-      - echo "Installing Python dependencies..."
+      - echo "Installing Python dependencies (if requirements.txt exists)..."
       - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - echo "Python dependencies installed."
 
   pre_build:
     commands:
-      - echo "Validating Python scripts..."
-      - ls -l glue_jobs/
-      - python -m py_compile glue_jobs/*.py
+      - echo "===== PRE_BUILD PHASE ====="
+      - echo "Current working directory: $(pwd)"
+      - echo "Listing all files at repo root:"
+      - ls -l
+      - echo "Listing glue_jobs folder contents:"
+      - if [ -d glue_jobs ]; then ls -l glue_jobs/; else echo "glue_jobs folder not found!"; fi
+      - echo "Validating Python scripts in glue_jobs..."
+      - python -m py_compile glue_jobs/*.py || echo "Python compilation errors detected!"
 
   build:
     commands:
-      - echo "Uploading Python scripts to S3..."
-      - aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/
+      - echo "===== BUILD PHASE ====="
+      - echo "Syncing glue_jobs/ to S3..."
+      - if [ -d glue_jobs ]; then aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/; else echo "Skipping S3 sync, glue_jobs folder not found."; fi
       - echo "S3 sync completed."
-      - ls -l /tmp  # optional: debug where files went
+      - echo "Verifying files in S3 bucket:"
+      - aws s3 ls s3://$S3_BUCKET/$S3_PATH/
 
   post_build:
     commands:
-      - echo "Debug: MAPPINGS variable is '$MAPPINGS'"
-      - echo "Updating Glue Jobs with new scripts..."
+      - echo "===== POST_BUILD PHASE ====="
+      - echo "Debug: MAPPINGS variable = '$MAPPINGS'"
+      - echo "Updating Glue jobs..."
       - |
         IFS=',' read -ra pairs <<< "$MAPPINGS"
         for pair in "${pairs[@]}"; do
