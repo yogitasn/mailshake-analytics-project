@@ -12,11 +12,12 @@ phases:
       - echo "Installing AWS CLI..."
       - pip install --upgrade awscli
       - echo "Installing Python dependencies..."
-      - pip install -r requirements.txt
+      - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
   pre_build:
     commands:
       - echo "Validating Python scripts..."
+      - ls -l glue_jobs/
       - python -m py_compile glue_jobs/*.py
 
   build:
@@ -24,16 +25,15 @@ phases:
       - echo "Uploading Python scripts to S3..."
       - aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/
       - echo "S3 sync completed."
+      - ls -l /tmp  # optional: debug where files went
 
   post_build:
     commands:
       - echo "Debug: MAPPINGS variable is '$MAPPINGS'"
       - echo "Updating Glue Jobs with new scripts..."
       - |
-        # Split MAPPINGS by comma into array
         IFS=',' read -ra pairs <<< "$MAPPINGS"
         for pair in "${pairs[@]}"; do
-          # Split each pair by colon into job name and script
           job="${pair%%:*}"
           script="${pair##*:}"
           echo "Updating Glue Job: $job with script: $script"
@@ -43,7 +43,5 @@ phases:
         done
       - echo "All Glue jobs updated successfully."
 
-# Artifacts are not needed for Glue deployment
 artifacts:
-  files:
-    - "**/*"
+  files: []
