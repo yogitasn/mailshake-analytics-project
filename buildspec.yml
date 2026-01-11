@@ -32,11 +32,15 @@ phases:
       - echo "Updating Glue Job - Mailshake_ingestion_job"
       - ROLE_ARN=$(aws glue get-job --job-name Mailshake_ingestion_job --query 'Job.Role' --output text)
       - echo "Retrieved Role - $ROLE_ARN"
-      - aws glue update-job --job-name Mailshake_ingestion_job --job-update '{"Role":"'"$ROLE_ARN"'","Command":{"Name":"glueetl","ScriptLocation":"s3://'"$S3_BUCKET"'/'"$S3_PATH"'/job_ingest.py","PythonVersion":"3"}}'
+      - echo "{\"Role\":\"$ROLE_ARN\",\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/job_ingest.py\",\"PythonVersion\":\"3\"}}" > /tmp/job_update1.json
+      - cat /tmp/job_update1.json
+      - aws glue update-job --job-name Mailshake_ingestion_job --job-update file:///tmp/job_update1.json
       - echo "Successfully updated Mailshake_ingestion_job"
       - echo "Updating Glue Job - Mailshake_transformation_job"
       - ROLE_ARN=$(aws glue get-job --job-name Mailshake_transformation_job --query 'Job.Role' --output text)
       - echo "Retrieved Role - $ROLE_ARN"
-      - aws glue update-job --job-name Mailshake_transformation_job --job-update '{"Role":"'"$ROLE_ARN"'","Command":{"Name":"glueetl","ScriptLocation":"s3://'"$S3_BUCKET"'/'"$S3_PATH"'/job_transform.py","PythonVersion":"3"}}'
+      - echo "{\"Role\":\"$ROLE_ARN\",\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/job_transform.py\",\"PythonVersion\":\"3\"}}" > /tmp/job_update2.json
+      - cat /tmp/job_update2.json
+      - aws glue update-job --job-name Mailshake_transformation_job --job-update file:///tmp/job_update2.json
       - echo "Successfully updated Mailshake_transformation_job"
       - echo "All Glue jobs updated successfully."
