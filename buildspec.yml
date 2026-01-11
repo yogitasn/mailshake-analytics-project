@@ -3,6 +3,7 @@ env:
   variables:
     S3_BUCKET: "mailshake-glue-scripts-dev"
     S3_PATH: "glue_jobs"
+    MAPPINGS: "Mailshake_ingestion_job:job_ingest.py,Mailshake_transformation_job:job_transform.py"
 
 phases:
   install:
@@ -29,32 +30,30 @@ phases:
   post_build:
     commands:
       - echo "===== POST_BUILD PHASE ====="
-      - echo "Updating Glue Job - Mailshake_ingestion_job"
       - |
-        aws glue update-job \
-          --job-name Mailshake_ingestion_job \
-          --job-update file://<(cat <<EOF
-        {
-          "Command": {
-            "Name": "glueetl",
-            "ScriptLocation": "s3://${S3_BUCKET}/${S3_PATH}/job_ingest.py",
-            "PythonVersion": "3"
-          }
-        }
-        EOF
-        )
-      - echo "Updating Glue Job - Mailshake_transformation_job"
-      - |
-        aws glue update-job \
-          --job-name Mailshake_transformation_job \
-          --job-update file://<(cat <<EOF
-        {
-          "Command": {
-            "Name": "glueetl",
-            "ScriptLocation": "s3://${S3_BUCKET}/${S3_PATH}/job_transform.py",
-            "PythonVersion": "3"
-          }
-        }
-        EOF
-        )
+        # Parse and update each Glue job from MAPPINGS
+        IFS=',' read -ra JOBS <<< "$MAPPINGS"
+        for job_mapping in "${JOBS[@]}"; do
+          JOB_NAME=$(echo $job_mapping | cut -d':' -f1)
+          SCRIPT_FILE=$(echo $job_mapping | cut -d':' -f2)
+          
+          echo "Updating Glue Job: $JOB_NAME with script: $SCRIPT_FILE"
+          
+          # Get current job role
+          ROLE_ARN=$(aws glue get-job --job-name "$JOB_NAME" --query 'Job.Role' --output text)
+          
+          echo "Retrieved Role: $ROLE_ARN"
+          
+          # Update job with role and new script location
+          aws glue update-job \
+            --job-name "$JOB_NAME" \
+            --job-update '{"Role":"'"$ROLE_ARN"'","Command":{"Name":"glueetl","ScriptLocation":"s3://'"$S3_BUCKET"'/'"$S3_PATH"'/'"$SCRIPT_FILE"'","PythonVersion":"3"}}'
+          
+          if [ $? -eq 0 ]; then
+            echo "Successfully updated $JOB_NAME"
+          else
+            echo "Failed to update $JOB_NAME"
+            exit 1
+          fi
+        done
       - echo "All Glue jobs updated successfully."
