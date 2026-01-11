@@ -42,11 +42,11 @@ phases:
   post_build:
     commands:
       - echo "===== POST_BUILD PHASE ====="
-      - echo "Debug: MAPPINGS variable = '$MAPPINGS'"
-      - 'IFS="," read -ra pairs <<< "$MAPPINGS"; for pair in "${pairs[@]}"; do job="${pair%%:*}"; script="${pair##*:}"; echo "Updating Glue Job: $job with script: $script"; aws glue update-job --job-name "$job" --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/$script\",\"PythonVersion\":\"3\"}}"; done'
+      - echo "Updating Glue Job: Mailshake_ingestion_job"
+      - aws glue update-job --job-name Mailshake_ingestion_job --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/job_ingest.py\",\"PythonVersion\":\"3\"}}"
+      - echo "Updating Glue Job: Mailshake_transformation_job"
+      - aws glue update-job --job-name Mailshake_transformation_job --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/job_transform.py\",\"PythonVersion\":\"3\"}}"
       - echo "All Glue jobs updated successfully."
-
-
 
 
 artifacts:
