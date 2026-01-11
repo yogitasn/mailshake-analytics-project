@@ -1,10 +1,8 @@
 version: 0.2
-
 env:
   variables:
     S3_BUCKET: "mailshake-glue-scripts-dev"
     S3_PATH: "glue_jobs"
-    MAPPINGS: "Mailshake_ingestion_job:job_ingest.py,Mailshake_transformation_job:job_transform.py"
 
 phases:
   install:
@@ -14,29 +12,49 @@ phases:
       - echo "===== INSTALL PHASE ====="
       - pip install --upgrade awscli
       - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-
+      
   pre_build:
     commands:
       - echo "===== PRE_BUILD PHASE ====="
       - ls -l
       - ls -l glue_jobs/
       - python -m py_compile glue_jobs/*.py
-
+      
   build:
     commands:
       - echo "===== BUILD PHASE ====="
       - aws s3 sync glue_jobs/ s3://$S3_BUCKET/$S3_PATH/
       - aws s3 ls s3://$S3_BUCKET/$S3_PATH/
-
+      
   post_build:
     commands:
       - echo "===== POST_BUILD PHASE ====="
-      - echo "Updating Glue Job: Mailshake_ingestion_job"
+      - echo "Updating Glue Job - Mailshake_ingestion_job"
       - |
-        aws glue update-job --job-name Mailshake_ingestion_job \
-        --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/job_ingest.py\",\"PythonVersion\":\"3\"}}"
-      - echo "Updating Glue Job: Mailshake_transformation_job"
+        aws glue update-job \
+          --job-name Mailshake_ingestion_job \
+          --job-update file://<(cat <<EOF
+        {
+          "Command": {
+            "Name": "glueetl",
+            "ScriptLocation": "s3://${S3_BUCKET}/${S3_PATH}/job_ingest.py",
+            "PythonVersion": "3"
+          }
+        }
+        EOF
+        )
+      - echo "Updating Glue Job - Mailshake_transformation_job"
       - |
-        aws glue update-job --job-name Mailshake_transformation_job \
-        --job-update "{\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"s3://$S3_BUCKET/$S3_PATH/job_transform.py\",\"PythonVersion\":\"3\"}}"
+        aws glue update-job \
+          --job-name Mailshake_transformation_job \
+          --job-update file://<(cat <<EOF
+        {
+          "Command": {
+            "Name": "glueetl",
+            "ScriptLocation": "s3://${S3_BUCKET}/${S3_PATH}/job_transform.py",
+            "PythonVersion": "3"
+          }
+        }
+        EOF
+        )
       - echo "All Glue jobs updated successfully."
