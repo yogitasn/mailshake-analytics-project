@@ -245,46 +245,6 @@ ACTIVITY_SENT_SCHEMA = StructType([
     StructField("from_last", StringType(), True),
 ])
 
-ACTIVITY_CLICKS_SCHEMA = StructType([
-    StructField("object", StringType(), True),
-    StructField("id", LongType(), True),
-    StructField("link", StringType(), True),
-    StructField("actionDate", StringType(), True),
-    StructField("isDuplicate", BooleanType(), True),
-
-    StructField("recipient_contactID", LongType(), True),
-    StructField("recipient_created", StringType(), True),
-    StructField("recipient_emailAddress", StringType(), True),
-    StructField("recipient_fields_account", StringType(), True),
-    StructField("recipient_fields_facebookUrl", StringType(), True),
-    StructField("recipient_fields_first", StringType(), True),
-    StructField("recipient_fields_instagramID", StringType(), True),
-    StructField("recipient_fields_last", StringType(), True),
-    StructField("recipient_fields_linkedInUrl", StringType(), True),
-    StructField("recipient_fields_phoneNumber", StringType(), True),
-    StructField("recipient_fields_twitterID", StringType(), True),
-    StructField("recipient_first", StringType(), True),
-    StructField("recipient_fullName", StringType(), True),
-    StructField("recipient_id", LongType(), True),
-    StructField("recipient_isPaused", BooleanType(), True),
-    StructField("recipient_last", StringType(), True),
-    StructField("recipient_object", StringType(), True),
-
-    StructField("campaign_id", LongType(), True),
-    StructField("campaign_object", StringType(), True),
-    StructField("campaign_title", StringType(), True),
-    StructField("campaign_wizardStatus", IntegerType(), True),
-
-    StructField("parent_id", LongType(), True),
-    StructField("parent_message_id", LongType(), True),
-    StructField("parent_message_object", StringType(), True),
-    StructField("parent_message_replyToID", IntegerType(), True),
-    StructField("parent_message_subject", StringType(), True),
-    StructField("parent_message_type", StringType(), True),
-    StructField("parent_object", StringType(), True),
-    StructField("parent_type", StringType(), True),
-])
-
 CREATED_LEADS_SCHEMA = StructType([
 
     # --------------------
@@ -363,11 +323,11 @@ from datetime import datetime, date
 # CONFIG
 # ============================================================================
 RAW_PATH = "s3a://mailshake-analytics/raw"
-CLEAN_PATH = "s3a://mailshake-analytics/clean"
-clean_base_path = "s3a://mailshake-analytics/clean"
+CURATED_PATH = "s3a://mailshake-analytics/curated"
+curated_base_path = "s3a://mailshake-analytics/curated"
 raw_base_path = "s3a://mailshake-analytics/raw"
 BUCKET = "mailshake-analytics"
-TEAMS_KEY = "config/teams_test1.json"
+CLIENTS_KEY = "config/clients_test.json"
 RUN_DATE = datetime.utcnow().strftime("%Y-%m-%d")
 SINGLE_DATE = None        # None for incremental activities
 # ============================================================================
@@ -398,29 +358,17 @@ hadoop_conf.set("fs.s3a.endpoint", "s3.amazonaws.com")
 hadoop_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
 
 # ============================================================================
-# team LOADING
+# CLIENT LOADING
 # ============================================================================
 s3 = boto3.client("s3")
 
+def load_clients() -> Dict[str, Dict[str, str]]:
+    obj = s3.get_object(Bucket=BUCKET, Key=CLIENTS_KEY)
+    return json.loads(obj["Body"].read().decode("utf-8")).get("clients", {})
 
-def load_teams() -> Dict[str, Dict[str, str]]:
-    obj = s3.get_object(Bucket=BUCKET, Key=TEAMS_KEY)
-    return json.loads(obj["Body"].read().decode("utf-8")).get("teams", {})
-
-# Load raw teams first
-teams_dict = load_teams()
-
-# Transform keys to use semantic team_id
-new_teams = {}
-for k, v in teams_dict.items():
-    new_key = v['team_id']
-    new_teams[new_key] = v
-
-teams_dict = new_teams
-
-TEAM_IDS = list(teams_dict.keys())
-print("Loaded teams:", TEAM_IDS)
-
+clients_dict = load_clients()
+CLIENT_IDS = list(clients_dict.keys())
+print(f"Loaded clients: {CLIENT_IDS}")
 
 # ============================================================================
 # HELPERS
@@ -481,6 +429,7 @@ def flatten_struct_columns(df):
         f.name for f in df.schema.fields
         if isinstance(f.dataType, ArrayType) and isinstance(f.dataType.elementType, StructType)
     ]
+    print(array_struct_cols)
     for col_name in array_struct_cols:
         df = df.withColumn(col_name, explode_outer(col(col_name)))
         for nested in df.schema[col_name].dataType.fields:
@@ -489,33 +438,33 @@ def flatten_struct_columns(df):
     return df
 
 
-def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, single_date=None):
+def get_dates_to_process(curated_path, raw_base_path, dataset_name, client_ids, single_date=None):
     """
     Returns dict:
-    - team_id -> list of incremental event_dates that ACTUALLY exist in raw
+    - client_id -> list of incremental event_dates that ACTUALLY exist in raw
     - Empty list => snapshot
     """
-    s3_team = boto3.client("s3")
+    s3_client = boto3.client("s3")
     bucket = "mailshake-analytics"
 
     # Manual override
     if single_date:
-        return {c: [single_date] for c in team_ids}
+        return {c: [single_date] for c in client_ids}
 
     # Campaigns never use incremental
     if dataset_name.startswith("campaign"):
-        return {c: [] for c in team_ids}
+        return {c: [] for c in client_ids}
 
-    # --- Read clean to get last processed date ---
+    # --- Read curated to get last processed date ---
     try:
-        existing = spark.read.parquet(clean_path)
+        existing = spark.read.parquet(curated_path)
         last_dates = (
-            existing.groupBy("team_id")
+            existing.groupBy("client_id")
             .agg(max("source_date").alias("last_date"))
             .collect()
         )
-        last_map = {r["team_id"]: r["last_date"] for r in last_dates}
-        print("Loaded last_dates from clean:")
+        last_map = {r["client_id"]: r["last_date"] for r in last_dates}
+        print("Loaded last_dates from curated:")
         for k, v in last_map.items():
             print(f"  {k}: {v}")
     except Exception:
@@ -523,20 +472,20 @@ def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, sing
 
     dates = {}
 
-    for team in team_ids:
-        # No clean → snapshot
-        if team not in last_map:
-            dates[team] = []
+    for client in client_ids:
+        # No curated → snapshot
+        if client not in last_map:
+            dates[client] = []
             continue
 
-        last_date = datetime.strptime(str(last_map[team]), "%Y-%m-%d").date()
+        last_date = datetime.strptime(str(last_map[client]), "%Y-%m-%d").date()
 
-        # List S3 folders for this team & dataset
-        prefix = f"raw/team_id={team}/entity={dataset_name}/"
+        # List S3 folders for this client & dataset
+        prefix = f"raw/client_id={client}/entity={dataset_name}/"
         incremental_dates = []
 
         try:
-            paginator = s3_team.get_paginator("list_objects_v2")
+            paginator = s3_client.get_paginator("list_objects_v2")
             pages = paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter='/')
 
             for page in pages:
@@ -553,19 +502,19 @@ def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, sing
             print(f"⚠️ Could not list raw path {prefix}: {e}")
             incremental_dates = []
 
-        dates[team] = sorted(incremental_dates)
-        print(f"{team} last_date={last_date}, incremental_dates={dates[team]}")
+        dates[client] = sorted(incremental_dates)
+        print(f"{client} last_date={last_date}, incremental_dates={dates[client]}")
 
     return dates
 def process_dataset(
     raw_base_path: str,
-    clean_base_path: str,
-    team_ids: list,
+    curated_base_path: str,
+    client_ids: list,
     dataset_name: str,
     unique_keys: list,
     schema: StructType,
     explode_col: str = None,
-    dates_per_team: dict = None
+    dates_per_client: dict = None
 ):
     """
     Generic dataset processor:
@@ -577,21 +526,21 @@ def process_dataset(
     - Deduplicates based on unique keys
     """
 
-    entity_path = f"{clean_base_path}/entity={dataset_name}"
+    entity_path = f"{curated_base_path}/entity={dataset_name}"
 
-    for team_id in team_ids:
+    for client_id in client_ids:
 
         # ------------------------------------------------------------------
         # Decide snapshot vs incremental
         # ------------------------------------------------------------------
-        clean_team_path = f"{clean_base_path}/entity={dataset_name}/team_id={team_id}"
+        curated_client_path = f"{curated_base_path}/entity={dataset_name}/client_id={client_id}"
 
         if dataset_name.startswith("campaign"):
             snapshot_mode = True
         else:
             try:
-                spark.read.parquet(clean_team_path)
-                snapshot_mode = False   # clean exists → incremental
+                spark.read.parquet(curated_client_path)
+                snapshot_mode = False   # curated exists → incremental
             except Exception:
                 snapshot_mode = True    # first run → snapshot
 
@@ -603,9 +552,9 @@ def process_dataset(
         if snapshot_mode:
             paths_to_process.append("snapshot")
         else:
-            incremental_dates = (dates_per_team or {}).get(team_id, [])
+            incremental_dates = (dates_per_client or {}).get(client_id, [])
             if not incremental_dates:
-                print(f"⚠️ No incremental dates for {dataset_name} | {team_id}, skipping.")
+                print(f"⚠️ No incremental dates for {dataset_name} | {client_id}, skipping.")
                 continue
 
             for d in incremental_dates:
@@ -615,10 +564,10 @@ def process_dataset(
         # Process each path
         # ------------------------------------------------------------------
         for p in paths_to_process:
-            input_path = f"{raw_base_path}/team_id={team_id}/entity={dataset_name}/{p}/"
+            input_path = f"{raw_base_path}/client_id={client_id}/entity={dataset_name}/{p}/"
 
             try:
-                print(f"📂 Processing {dataset_name} | {team_id} | {p}")
+                print(f"📂 Processing {dataset_name} | {client_id} | {p}")
                 df = spark.read.parquet(input_path)
               
                # 1️⃣ Flatten structs & explode arrays FIRST
@@ -649,9 +598,9 @@ def process_dataset(
 
                 # -------------------- Metadata --------------------
                 df = (
-                    df.withColumn("team_id", lit(team_id))
+                    df.withColumn("client_id", lit(client_id))
                       .withColumn("source_date", lit(source_date_val))
-                      .withColumn("team_id_col", lit(team_id))
+                      .withColumn("client_id_col", lit(client_id))
                       .withColumn("source_date_col", lit(source_date_val))
                       .withColumn("processing_timestamp", current_timestamp())
                       .withColumn("processing_date", current_date())
@@ -660,130 +609,112 @@ def process_dataset(
 
                 # -------------------- Deduplication --------------------
                 safe_keys = [k.replace(".", "_") for k in unique_keys]
-                df = df.dropDuplicates(safe_keys + ["team_id", "source_date"])
+                df = df.dropDuplicates(safe_keys + ["client_id", "source_date"])
 
                 # -------------------- Write --------------------
                 write_mode = "overwrite" if snapshot_mode else "append"
-                df.write.mode(write_mode).partitionBy("team_id","source_date").parquet(entity_path)
+                df.write.mode(write_mode).partitionBy("client_id","source_date").parquet(entity_path)
 
-                print(f"✅ Written {df.count()} records for {dataset_name} | {team_id} | {p}")
+                print(f"✅ Written {df.count()} records for {dataset_name} | {client_id} | {p}")
 
             except Exception as e:
-                print(f"⚠️ Skipped {dataset_name} | {team_id} | {p}: {e}")
+                print(f"⚠️ Skipped {dataset_name} | {client_id} | {p}: {e}")
 
 
 # ============================================================================
 # RUN
 # ============================================================================
-
+if __name__ == "__main__":
 # # -------------------- campaign --------------------
-process_dataset(
-    RAW_PATH,
-    CLEAN_PATH,
-    TEAM_IDS,
-    "campaign",
-    unique_keys=["id", "messages_id"],
-    schema=CAMPAIGN_SCHEMA,
-    dates_per_team=None
-)
+    process_dataset(
+        RAW_PATH,
+        CURATED_PATH,
+        CLIENT_IDS,
+        "campaign",
+        unique_keys=["id", "messages_id"],
+        schema=CAMPAIGN_SCHEMA,
+        dates_per_client=None
+    )
 
-# -------------------- activity_open --------------------
-dates_per_team = get_dates_to_process(
-    clean_path=f"{CLEAN_PATH}/entity=activity_open",
-    raw_base_path=RAW_PATH,
-    dataset_name="activity_open",
-    team_ids=TEAM_IDS,
-    single_date=None
-)
-
-
-process_dataset(
-    RAW_PATH,
-    CLEAN_PATH,
-    TEAM_IDS,
-    "activity_open",
-    unique_keys=["id", "recipient.id", "campaign.id"],
-    schema=ACTIVITY_OPEN_SCHEMA,
-    dates_per_team=dates_per_team
-)
-
-# -------------------- activity_reply --------------------
-dates_per_team = get_dates_to_process(
-    clean_path=f"{CLEAN_PATH}/entity=activity_reply",
-    raw_base_path=RAW_PATH,
-    dataset_name="activity_reply",
-    team_ids=TEAM_IDS,
-    single_date=None
-)
+    # -------------------- activity_open --------------------
+    dates_per_client = get_dates_to_process(
+        curated_path=f"{CURATED_PATH}/entity=activity_open",
+        raw_base_path=RAW_PATH,
+        dataset_name="activity_open",
+        client_ids=CLIENT_IDS,
+        single_date=None
+    )
 
 
-process_dataset(
-    RAW_PATH,
-    CLEAN_PATH,
-    TEAM_IDS,
-    "activity_reply",
-    unique_keys=["id", "recipient.id", "campaign.id"],
-    schema=ACTIVITY_REPLY_SCHEMA,
-    dates_per_team=dates_per_team
-)
+    process_dataset(
+        RAW_PATH,
+        CURATED_PATH,
+        CLIENT_IDS,
+        "activity_open",
+        unique_keys=["id", "recipient.id", "campaign.id"],
+        schema=ACTIVITY_OPEN_SCHEMA,
+        dates_per_client=dates_per_client
+    )
 
-# -------------------- activity_sent --------------------
-dates_per_team = get_dates_to_process(
-    clean_path=f"{CLEAN_PATH}/entity=activity_sent",
-    raw_base_path=RAW_PATH,
-    dataset_name="activity_sent",
-    team_ids=TEAM_IDS,
-    single_date=None
-)
-
-
-process_dataset(
-    RAW_PATH,
-    CLEAN_PATH,
-    TEAM_IDS,
-    "activity_sent",
-    unique_keys=["id", "recipient.id", "campaign.id"],
-    schema=ACTIVITY_SENT_SCHEMA,
-    dates_per_team=dates_per_team
-)
-
-# -------------------- activity_clicks --------------------
-dates_per_team = get_dates_to_process(
-    clean_path=f"{CLEAN_PATH}/entity=activity_clicks",
-    raw_base_path=RAW_PATH,
-    dataset_name="activity_clicks",
-    team_ids=TEAM_IDS,
-    single_date=None
-)
+    # -------------------- activity_reply --------------------
+    dates_per_client = get_dates_to_process(
+        curated_path=f"{CURATED_PATH}/entity=activity_reply",
+        raw_base_path=RAW_PATH,
+        dataset_name="activity_reply",
+        client_ids=CLIENT_IDS,
+        single_date=None
+    )
 
 
-process_dataset(
-    RAW_PATH,
-    CLEAN_PATH,
-    TEAM_IDS,
-    "activity_clicks",
-    unique_keys=["id", "recipient.id", "campaign.id"],
-    schema=ACTIVITY_CLICKS_SCHEMA,
-    dates_per_team=dates_per_team
-)
-# # -------------------- created_leads --------------------
-dates_per_team = get_dates_to_process(
-    clean_path=f"{CLEAN_PATH}/entity=created_leads",
-    raw_base_path=RAW_PATH,
-    dataset_name="created_leads",
-    team_ids=TEAM_IDS,
-    single_date=None
-)
+    process_dataset(
+        RAW_PATH,
+        CURATED_PATH,
+        CLIENT_IDS,
+        "activity_reply",
+        unique_keys=["id", "recipient.id", "campaign.id"],
+        schema=ACTIVITY_REPLY_SCHEMA,
+        dates_per_client=dates_per_client
+    )
+
+    # -------------------- activity_sent --------------------
+    dates_per_client = get_dates_to_process(
+        curated_path=f"{CURATED_PATH}/entity=activity_sent",
+        raw_base_path=RAW_PATH,
+        dataset_name="activity_sent",
+        client_ids=CLIENT_IDS,
+        single_date=None
+    )
 
 
-process_dataset(
-    RAW_PATH,
-    CLEAN_PATH,
-    TEAM_IDS,
-    "created_leads",
-    unique_keys=["id", "recipient.id", "campaign.id"],
-    schema=CREATED_LEADS_SCHEMA,
-    dates_per_team=dates_per_team
-)
-spark.stop()
-print("🎉 All datasets processed successfully!")
+    process_dataset(
+        RAW_PATH,
+        CURATED_PATH,
+        CLIENT_IDS,
+        "activity_sent",
+        unique_keys=["id", "recipient.id", "campaign.id"],
+        schema=ACTIVITY_SENT_SCHEMA,
+        dates_per_client=dates_per_client
+    )
+
+    # # -------------------- created_leads --------------------
+    dates_per_client = get_dates_to_process(
+        curated_path=f"{CURATED_PATH}/entity=created_leads",
+        raw_base_path=RAW_PATH,
+        dataset_name="created_leads",
+        client_ids=CLIENT_IDS,
+        single_date=None
+    )
+
+
+    process_dataset(
+        RAW_PATH,
+        CURATED_PATH,
+        CLIENT_IDS,
+        "created_leads",
+        unique_keys=["id", "recipient.id", "campaign.id"],
+        schema=CREATED_LEADS_SCHEMA,
+        dates_per_client=dates_per_client
+    )
+    spark.stop()
+    print("🎉 All datasets processed successfully!")
+

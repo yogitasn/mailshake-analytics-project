@@ -1,7 +1,3 @@
-#incremental code update
-
-#new code
-
 # ============================================================================
 # IMPORTS
 # ============================================================================
@@ -21,16 +17,16 @@ HEADERS = {"Content-Type": "application/json"}
 BUCKET = "mailshake-analytics"
 RAW_PREFIX = "raw"
 WATERMARK_PREFIX = "metadata/watermark"
-TEAMS_KEY = "config/teams_test1.json"
+CLIENTS_KEY = "config/clients_test.json"
 s3 = boto3.client("s3")
 RUN_DATE = datetime.utcnow().strftime("%Y-%m-%d")
 
 # ============================================================================
-# Team CONFIG
+# CLIENT CONFIG
 # ============================================================================
-def load_teams() -> Dict[str, Dict[str, str]]:
-    obj = s3.get_object(Bucket=BUCKET, Key=TEAMS_KEY)
-    return json.loads(obj["Body"].read().decode("utf-8")).get("teams", {})
+def load_clients() -> Dict[str, Dict[str, str]]:
+    obj = s3.get_object(Bucket=BUCKET, Key=CLIENTS_KEY)
+    return json.loads(obj["Body"].read().decode("utf-8")).get("clients", {})
 
 # ============================================================================
 # SAFE POST
@@ -46,22 +42,22 @@ def safe_post(url: str, payload: Dict[str, Any], auth: HTTPBasicAuth) -> request
 # ============================================================================
 # WATERMARK HELPERS
 # ============================================================================
-def read_watermarks(team_id: str) -> dict:
-    key = f"{WATERMARK_PREFIX}/watermark_{team_id}.json"
+def read_watermarks(client_id: str) -> dict:
+    key = f"{WATERMARK_PREFIX}/watermark_{client_id}.json"
     try:
         obj = s3.get_object(Bucket=BUCKET, Key=key)
         return json.loads(obj["Body"].read().decode("utf-8"))
     except s3.exceptions.NoSuchKey:
         return {}
 
-def update_watermarks(team_id: str, new_data: dict):
-    key = f"{WATERMARK_PREFIX}/watermark_{team_id}.json"
-    current = read_watermarks(team_id)
+def update_watermarks(client_id: str, new_data: dict):
+    key = f"{WATERMARK_PREFIX}/watermark_{client_id}.json"
+    current = read_watermarks(client_id)
     current.update(new_data)
     s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(current, indent=2).encode("utf-8"))
 
-def get_watermark(team_id: str, entity: str) -> str:
-    watermarks = read_watermarks(team_id)
+def get_watermark(client_id: str, entity: str) -> str:
+    watermarks = read_watermarks(client_id)
     return watermarks.get(entity, "1970-01-01T00:00:00Z")
 
 # ============================================================================
@@ -71,7 +67,7 @@ def get_watermark(team_id: str, entity: str) -> str:
 # SAVE PARQUET (SNAPSHOT OR INCREMENTAL) — FULL SPARK SAFE WITH WATERMARK
 # ============================================================================
 def save_snapshot_or_incremental(
-    data: list, team_id: str, entity: str, ts_col: str, first_run: bool
+    data: list, client_id: str, entity: str, ts_col: str, first_run: bool
 ):
     if not data:
         print(f"⚠️ No data for {entity}")
@@ -99,8 +95,8 @@ def save_snapshot_or_incremental(
     # FIRST RUN → SNAPSHOT
     # -------------------------
     if first_run:
-        file = f"/tmp/{team_id}_{entity}_snapshot.parquet"
-        key = f"{RAW_PREFIX}/team_id={team_id}/entity={entity}/snapshot/{entity}.parquet"
+        file = f"/tmp/{client_id}_{entity}_snapshot.parquet"
+        key = f"{RAW_PREFIX}/client_id={client_id}/entity={entity}/snapshot/{entity}.parquet"
         df.to_parquet(file, index=False)
         s3.upload_file(file, BUCKET, key)
         print(f"🟦 SNAPSHOT → {entity}")
@@ -109,7 +105,7 @@ def save_snapshot_or_incremental(
     # -------------------------
     # FILTER BY SAVED WATERMARK
     # -------------------------
-    current_wm = get_watermark(team_id, entity)
+    current_wm = get_watermark(client_id, entity)
     print(current_wm)
     if ts_col in df.columns and current_wm:
         current_wm_dt = pd.to_datetime(current_wm, utc=True)
@@ -124,8 +120,8 @@ def save_snapshot_or_incremental(
     if entity == "created_leads":
         new_wm = df[ts_col].max() if ts_col in df.columns else batch_ts
         wm_suffix = new_wm.replace(":", "").replace("-", "")
-        file = f"/tmp/{team_id}_{entity}_{wm_suffix}.parquet"
-        key = f"{RAW_PREFIX}/team_id={team_id}/entity={entity}/run_date={RUN_DATE}/{entity}_{wm_suffix}.parquet"
+        file = f"/tmp/{client_id}_{entity}_{wm_suffix}.parquet"
+        key = f"{RAW_PREFIX}/client_id={client_id}/entity={entity}/run_date={RUN_DATE}/{entity}_{wm_suffix}.parquet"
         df.to_parquet(file, index=False)
         s3.upload_file(file, BUCKET, key)
         print(f"🟢 INCREMENTAL → {entity} ({len(df)})")
@@ -145,8 +141,8 @@ def save_snapshot_or_incremental(
         part = df[df["event_date"] == d].copy()
         part.drop(columns=["event_date"], inplace=True)
         wm_suffix = new_wm.replace(":", "").replace("-", "")
-        file = f"/tmp/{team_id}_{entity}_{d}_{wm_suffix}.parquet"
-        key = f"{RAW_PREFIX}/team_id={team_id}/entity={entity}/event_date={d}/{entity}_{wm_suffix}.parquet"
+        file = f"/tmp/{client_id}_{entity}_{d}_{wm_suffix}.parquet"
+        key = f"{RAW_PREFIX}/client_id={client_id}/entity={entity}/event_date={d}/{entity}_{wm_suffix}.parquet"
         part.to_parquet(file, index=False)
         s3.upload_file(file, BUCKET, key)
         print(f"🟢 INCREMENTAL → {entity} ({len(part)})")
@@ -165,29 +161,28 @@ def fetch_activity(team_id: str, api_name: str, since_ts: str, auth: HTTPBasicAu
     return resp.json().get("results", []) or []
 
 # ============================================================================
-# RUN SINGLE team
+# RUN SINGLE CLIENT
 # ============================================================================
-def run_team(team: Dict[str, str]):
-    team_id, team_id, auth = team["team_id"], team["team_id"], HTTPBasicAuth(team["api_token"], "")
-    print(f"\n🚀 STARTING Team {team_id}")
+def run_client(client: Dict[str, str]):
+    client_id, team_id, auth = client["client_id"], client["team_id"], HTTPBasicAuth(client["api_token"], "")
+    print(f"\n🚀 STARTING CLIENT {client_id}")
 
     # -------- CAMPAIGNS (FULL LOAD) --------
     campaigns = fetch_campaigns(team_id, auth)
     if campaigns:
-        wm = save_snapshot_or_incremental(campaigns, team_id, "campaign", "created", first_run=True)
+        wm = save_snapshot_or_incremental(campaigns, client_id, "campaign", "created", first_run=True)
         if wm:
-            update_watermarks(team_id, {"campaign": wm})
+            update_watermarks(client_id, {"campaign": wm})
 
     # -------- ACTIVITIES / CREATED_LEADS (INCREMENTAL) --------
     activity_map = {
         "activity_open": ("opens", "actionDate"),
         "activity_reply": ("replies", "actionDate"),
         "activity_sent": ("sent", "actionDate"),
-        "activity_clicks": ("clicks","actionDate"),
         "created_leads": ("created-leads", "created")
     }
 
-    watermarks = read_watermarks(team_id)
+    watermarks = read_watermarks(client_id)
 
     for entity, (api, ts_col) in activity_map.items():
         watermark = watermarks.get(entity, "1970-01-01T00:00:00Z")
@@ -199,33 +194,33 @@ def run_team(team: Dict[str, str]):
             print(f"⚠️ No new records for {entity}")
             continue
 
-        new_wm = save_snapshot_or_incremental(data, team_id, entity, ts_col, first_run)
+        new_wm = save_snapshot_or_incremental(data, client_id, entity, ts_col, first_run)
 
         if new_wm:
             old_wm = watermarks.get(entity)
             if old_wm is None or new_wm > old_wm:
-                update_watermarks(team_id, {entity: new_wm})
+                update_watermarks(client_id, {entity: new_wm})
                 watermarks[entity] = new_wm
                 print(f"🔁 Watermark updated → {new_wm}")
 
-    print(f"✅ Team {team_id} COMPLETED")
+    print(f"✅ CLIENT {client_id} COMPLETED")
 
 # ============================================================================
 # MAIN LOOP
 # ============================================================================
 if __name__ == "__main__":
-    teams = load_teams()
-    for team_id, team_cfg in teams.items():
+    clients = load_clients()
+    for client_id, client_cfg in clients.items():
         try:
-            run_team({
-                "team_id": team_id,
-                "team_id": team_cfg["team_id"],
-                "api_token": team_cfg["api_token"]
+            run_client({
+                "client_id": client_id,
+                "team_id": client_cfg["team_id"],
+                "api_token": client_cfg["api_token"]
             })
         except SystemExit:
-            print("🚫 API LIMIT HIT — STOPPING ALL teamS")
+            print("🚫 API LIMIT HIT — STOPPING ALL CLIENTS")
             break
         except Exception as e:
-            print(f"❌ team {team_id} failed: {e}")
+            print(f"❌ Client {client_id} failed: {e}")
 
     print("\n🏁 JOB FINISHED")
