@@ -27,11 +27,11 @@ A jupyter notebook will open on successful execution of the above command.
 
 Execute the `DataIngestion.ipynb` script and ingest the data from Mailshake API for the different clients. The data is stored in the below format i.e. snapshot and event-date. 
 
-![alt text](raw_path_team6.png)
+![alt text](Images/raw_path_team6.png)
 
 Snapshot data is stored below 
 
-![alt text](raw_path_snapshot.png)
+![alt text](Images/raw_path_snapshot.png)
 
 Incremental data is stored in the event folders. 
 
@@ -42,7 +42,7 @@ The incremental processing happens with the help of watermark stored
 
 The data is raw format will be processed by the  `Data transformation script` and saved in clean format
 
-![alt text](clean_path_team6.png)
+![alt text](Images/clean_path_team6.png)
 
 Metrics:
 
