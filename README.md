@@ -25,7 +25,7 @@ Run the below docker command to spin up jupyter notebook to run the pyspark scri
 
 A jupyter notebook will open on successful execution of the above command.
 
-Execute the `DataIngestion.ipynb` script and ingest the data from Mailshake API for the different clients. The data is stored in the below format i.e. snapshot and event-date. 
+Run the 'job_ingest' script to ingest data from the Mailshake API for the various clients. The data is stored in the following formats: snapshot and event-date partitions. 
 
 ![alt text](Images/raw_path_team6.png)
 
@@ -40,7 +40,7 @@ The incremental processing happens with the help of watermark stored
 ![alt text](Images/watermark_team6.png)
 
 
-The data is raw format will be processed by the  `Data transformation script` and saved in clean format
+The data is currently in raw format and will be processed by the 'job_transform' job , then saved in a clean, structured format.
 
 ![alt text](Images/clean_path_team6.png)
 
