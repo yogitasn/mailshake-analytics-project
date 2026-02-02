@@ -1,0 +1,122 @@
+WITH sent_activity AS 
+(SELECT *, TO_DATE(
+  ACTIONDATE,
+  'YYYY-MM-DD"T"HH24:MI:SS+TZHTZM'
+) AS date_col
+ FROM ACTIVITY_SENT_STAGING
+ )
+,
+open_activity AS 
+(SELECT *,  CAST(
+  TRY_TO_TIMESTAMP_TZ(
+    REGEXP_REPLACE(actiondate, '(\\+\\d{2})(\\d{2})$', '\\1:\\2')
+  ) AS DATE
+) AS date_col
+ FROM ACTIVITY_OPEN_STAGING
+ )
+,
+reply_activity AS 
+(SELECT *,  CAST(
+  TRY_TO_TIMESTAMP_TZ(
+    REGEXP_REPLACE(actiondate, '(\\+\\d{2})(\\d{2})$', '\\1:\\2')
+  ) AS DATE
+) AS date_col
+ FROM ACTIVITY_REPLY_STAGING
+ )
+ ,
+ unique_date_list AS
+ (
+    SELECT date_col,team_id_col FROM sent_activity
+    UNION
+    SELECT date_col,team_id_col FROM open_activity
+    UNION 
+    SELECT date_col,team_id_col FROM reply_activity
+ 
+ )
+, base AS (
+    SELECT
+        ud.date_col,
+        COUNT(DISTINCT CONCAT(st.recipient_id, ':', st.message_id)) AS sent,
+        COUNT(DISTINCT CASE
+            WHEN op.object = 'open'
+            THEN CONCAT(op.recipient_id, ':', op.parent_message_id)
+        END) AS unique_opens,
+        COUNT(DISTINCT CASE
+            WHEN rp.object = 'reply' AND rp.type = 'reply'
+            THEN CONCAT(rp.recipient_id, ':', rp.parent_message_id)
+        END) AS unique_reply,
+        COUNT(DISTINCT CASE
+            WHEN rp.object = 'reply' AND rp.type = 'bounce'
+            THEN CONCAT(rp.recipient_id, ':', rp.parent_message_id)
+        END) AS unique_bounce
+    FROM unique_date_list ud
+    LEFT JOIN sent_activity st
+        ON ud.date_col = st.date_col
+    LEFT JOIN open_activity op
+        ON ud.date_col = op.date_col
+    LEFT JOIN reply_activity rp
+        ON ud.date_col = rp.date_col
+    GROUP BY ud.date_col
+),
+
+metrics AS (
+    SELECT
+        metric,
+        date_col,
+        value
+    FROM base
+    UNPIVOT (
+        value FOR metric IN (
+            sent,
+            unique_opens,
+            unique_reply,
+            unique_bounce
+        )
+    )
+)
+
+SELECT *
+FROM metrics
+PIVOT (
+    SUM(value)
+    FOR date_col IN (
+        '2026-01-06',
+        '2026-01-07',
+        '2026-01-08',
+        '2026-01-09',
+        '2026-01-10',
+        '2026-01-11',
+        '2026-01-12',
+        '2026-01-13',
+        '2026-01-14',
+        '2026-01-15',
+        '2026-01-16',
+        '2026-01-17',
+        '2026-01-21',
+        '2026-01-22',
+        '2026-01-26',
+        '2026-01-27'
+    )
+)
+ORDER BY metric;
+
+
+-- SELECT
+--     ud.date_col,
+--     ud.team_id_col AS team,
+--     COUNT(DISTINCT CONCAT(st.recipient_id, ':', st.message_id)) AS sent,
+--     COUNT(DISTINCT CASE WHEN op.object='open' THEN CONCAT(op.recipient_id, ':', op.parent_message_id) END) AS unique_opens,
+--     COUNT(DISTINCT CASE WHEN rp.object = 'reply' and rp.type = 'reply' THEN CONCAT(rp.recipient_id, ':', rp.parent_message_id) END) AS unique_reply,
+--     COUNT(DISTINCT CASE WHEN rp.object = 'reply' and rp.type = 'bounce' THEN CONCAT(rp.recipient_id, ':', rp.parent_message_id) END) AS unique_bounce
+-- FROM unique_date_list ud 
+-- LEFT JOIN sent_activity st 
+-- ON ud.date_col = st.date_col
+-- AND ud.team_id_col = st.team_id_col
+-- LEFT JOIN open_activity op
+-- ON ud.date_col = op.date_col
+-- AND ud.team_id_col = op.team_id_col
+-- LEFT JOIN reply_activity rp
+-- ON ud.date_col = rp.date_col
+-- AND ud.team_id_col = rp.team_id_col
+-- GROUP BY ud.date_col, ud.team_id_col
+-- ORDER BY ud.date_col;

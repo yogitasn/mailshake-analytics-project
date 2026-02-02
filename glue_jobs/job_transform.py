@@ -367,7 +367,7 @@ CLEAN_PATH = "s3a://mailshake-analytics/clean"
 clean_base_path = "s3a://mailshake-analytics/clean"
 raw_base_path = "s3a://mailshake-analytics/raw"
 BUCKET = "mailshake-analytics"
-TEAMS_KEY = "config/teams_test1.json"
+TEAMS_KEY = "config/teams_test1_sample.json"
 RUN_DATE = datetime.utcnow().strftime("%Y-%m-%d")
 SINGLE_DATE = None        # None for incremental activities
 # ============================================================================
@@ -514,7 +514,7 @@ def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, sing
             .agg(max("source_date").alias("last_date"))
             .collect()
         )
-        last_map = {r["team_id"]: r["last_date"] for r in last_dates}
+        last_map = {str(r["team_id"]): r["last_date"] for r in last_dates}
         print("Loaded last_dates from clean:")
         for k, v in last_map.items():
             print(f"  {k}: {v}")
@@ -533,6 +533,7 @@ def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, sing
 
         # List S3 folders for this team & dataset
         prefix = f"raw/team_id={team}/entity={dataset_name}/"
+        
         incremental_dates = []
 
         try:
