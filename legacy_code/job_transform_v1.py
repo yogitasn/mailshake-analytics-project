@@ -345,37 +345,31 @@ CREATED_LEADS_SCHEMA = StructType([
     StructField("assignedto_last", StringType(), True),
 ])
 
-# Updated the logging mechanism and changed folder to remove team_id
+#Implement schema enforcement to avoid schema drift 
 # ============================================================================
 # IMPORTS
 # ============================================================================
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import col, max, lit, current_timestamp, current_date, explode_outer
-from pyspark.sql.types import NullType, StringType, StructType, ArrayType
-from datetime import datetime
+from pyspark.sql.functions import (
+    col, max, lit, current_timestamp, current_date, explode_outer
+)
+from pyspark.sql.types import NullType, StringType, DoubleType, StructType, ArrayType,LongType
+from datetime import datetime, timedelta
 import os, re, json, boto3
 from typing import Dict
-import logging
-
-# ============================================================================
-# LOGGING CONFIG
-# ============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-logger = logging.getLogger(__name__)
+from datetime import datetime, date
 
 # ============================================================================
 # CONFIG
 # ============================================================================
 RAW_PATH = "s3a://mailshake-analytics/raw"
 CLEAN_PATH = "s3a://mailshake-analytics/clean"
+clean_base_path = "s3a://mailshake-analytics/clean"
+raw_base_path = "s3a://mailshake-analytics/raw"
 BUCKET = "mailshake-analytics"
-TEAMS_KEY = "config/teams_test2_sample.json"
+TEAMS_KEY = "config/teams_test1_sample.json"
 RUN_DATE = datetime.utcnow().strftime("%Y-%m-%d")
-SINGLE_DATE = None
-
+SINGLE_DATE = None        # None for incremental activities
 # ============================================================================
 # SPARK SESSION
 # ============================================================================
@@ -404,18 +398,29 @@ hadoop_conf.set("fs.s3a.endpoint", "s3.amazonaws.com")
 hadoop_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
 
 # ============================================================================
-# TEAM LOADING
+# team LOADING
 # ============================================================================
 s3 = boto3.client("s3")
+
 
 def load_teams() -> Dict[str, Dict[str, str]]:
     obj = s3.get_object(Bucket=BUCKET, Key=TEAMS_KEY)
     return json.loads(obj["Body"].read().decode("utf-8")).get("teams", {})
 
+# Load raw teams first
 teams_dict = load_teams()
-teams_dict = {v['team_id']: v for v in teams_dict.values()}
+
+# Transform keys to use semantic team_id
+new_teams = {}
+for k, v in teams_dict.items():
+    new_key = v['team_id']
+    new_teams[new_key] = v
+
+teams_dict = new_teams
+
 TEAM_IDS = list(teams_dict.keys())
-logger.info(f"Loaded teams: {TEAM_IDS}")
+print("Loaded teams:", TEAM_IDS)
+
 
 # ============================================================================
 # HELPERS
@@ -434,30 +439,39 @@ def fix_void_columns(df):
             df = df.withColumn(field.name, col(field.name).cast(StringType()))
     return df
 
+
 def enforce_schema(df: DataFrame, schema: StructType) -> DataFrame:
+    # Normalize df columns
     df = df.select([col(c).alias(c.strip().lower()) for c in df.columns])
+
     expected_cols = [f.name.strip().lower() for f in schema.fields]
     expected_types = {f.name.strip().lower(): f.dataType for f in schema.fields}
 
+    # Add missing columns
     for c, t in expected_types.items():
         if c not in df.columns:
-            logger.warning(f"Adding missing column: {c} ({t})")
+            print(f"⚠️ Adding missing column: {c} ({t})")
             df = df.withColumn(c, lit(None).cast(t))
-        else:
+
+    # Cast existing columns
+    for c, t in expected_types.items():
+        if c in df.columns:
             df = df.withColumn(c, col(c).cast(t))
 
+    # Drop extra columns
     extra_cols = set(df.columns) - set(expected_cols)
     if extra_cols:
-        logger.warning(f"Dropping extra columns: {extra_cols}")
+        print(f"⚠️ Dropping extra columns: {extra_cols}")
         df = df.drop(*extra_cols)
 
+    # Reorder
     return df.select(expected_cols)
+
 
 def flatten_struct_columns(df):
     while True:
         struct_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, StructType)]
-        if not struct_cols:
-            break
+        if not struct_cols: break
         for col_name in struct_cols:
             for nested in df.schema[col_name].dataType.fields:
                 df = df.withColumn(f"{col_name}_{nested.name}", col(f"{col_name}.{nested.name}"))
@@ -474,20 +488,25 @@ def flatten_struct_columns(df):
         df = df.drop(col_name)
     return df
 
-# ============================================================================
-# GET DATES TO PROCESS
-# ============================================================================
-def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, single_date=None):
 
-    s3_client = boto3.client("s3")
+def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, single_date=None):
+    """
+    Returns dict:
+    - team_id -> list of incremental event_dates that ACTUALLY exist in raw
+    - Empty list => snapshot
+    """
+    s3_team = boto3.client("s3")
     bucket = "mailshake-analytics"
 
+    # Manual override
     if single_date:
-        return {team: [single_date] for team in team_ids}, {}
+        return {c: [single_date] for c in team_ids}
 
+    # Campaigns never use incremental
     if dataset_name.startswith("campaign"):
-        return {team: [] for team in team_ids}, {}
+        return {c: [] for c in team_ids}
 
+    # --- Read clean to get last processed date ---
     try:
         existing = spark.read.parquet(clean_path)
         last_dates = (
@@ -496,48 +515,49 @@ def get_dates_to_process(clean_path, raw_base_path, dataset_name, team_ids, sing
             .collect()
         )
         last_map = {str(r["team_id"]): r["last_date"] for r in last_dates}
-        logger.info("Loaded last_dates from clean:")
+        print("Loaded last_dates from clean:")
         for k, v in last_map.items():
-            logger.info(f"{k}: {v}")
+            print(f"  {k}: {v}")
     except Exception:
         last_map = {}
 
-    dates_per_team = {}
+    dates = {}
 
     for team in team_ids:
-
+        # No clean → snapshot
         if team not in last_map:
-            dates_per_team[team] = []
+            dates[team] = []
             continue
 
         last_date = datetime.strptime(str(last_map[team]), "%Y-%m-%d").date()
+
+        # List S3 folders for this team & dataset
         prefix = f"raw/team_id={team}/entity={dataset_name}/"
+        
         incremental_dates = []
 
         try:
-            paginator = s3_client.get_paginator("list_objects_v2")
+            paginator = s3_team.get_paginator("list_objects_v2")
             pages = paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter='/')
 
             for page in pages:
                 for cp in page.get("CommonPrefixes", []):
-                    folder_name = cp.get("Prefix").rstrip('/').split('/')[-1]
+                    folder_name = cp.get("Prefix").rstrip('/').split('/')[-1]  # e.g., event_date=2026-01-03
                     if folder_name.startswith("event_date="):
                         d_str = folder_name.split("=")[1]
                         d_dt = datetime.strptime(d_str, "%Y-%m-%d").date()
+                        print(f"Found S3 folder: {d_dt}")
                         if d_dt > last_date:
                             incremental_dates.append(d_str)
 
         except Exception as e:
-            logger.error(f"Could not list raw path {prefix}: {e}", exc_info=True)
+            print(f"⚠️ Could not list raw path {prefix}: {e}")
+            incremental_dates = []
 
-        dates_per_team[team] = sorted(incremental_dates)
-        logger.info(f"Team {team} incremental dates after {last_date}: {dates_per_team[team]}")
+        dates[team] = sorted(incremental_dates)
+        print(f"{team} last_date={last_date}, incremental_dates={dates[team]}")
 
-    return dates_per_team, last_map
-
-# ============================================================================
-# PROCESS DATASET
-# ============================================================================
+    return dates
 def process_dataset(
     raw_base_path: str,
     clean_base_path: str,
@@ -545,114 +565,226 @@ def process_dataset(
     dataset_name: str,
     unique_keys: list,
     schema: StructType,
-    dates_per_team: dict = None,
-    last_map: dict = None
+    explode_col: str = None,
+    dates_per_team: dict = None
 ):
+    """
+    Generic dataset processor:
+    - Handles snapshots and incremental loads
+    - Flattens nested structs and arrays
+    - Sanitizes column names
+    - Enforces schema: adds missing columns, casts types, drops extras, reorders
+    - Fixes NullType columns
+    - Deduplicates based on unique keys
+    """
+
     entity_path = f"{clean_base_path}/entity={dataset_name}"
 
     for team_id in team_ids:
 
+        # ------------------------------------------------------------------
+        # Decide snapshot vs incremental
+        # ------------------------------------------------------------------
+        clean_team_path = f"{clean_base_path}/entity={dataset_name}/team_id={team_id}"
+
         if dataset_name.startswith("campaign"):
             snapshot_mode = True
-            paths_to_process = ["snapshot"]
         else:
-            if last_map is None or team_id not in last_map:
-                snapshot_mode = True
-                paths_to_process = ["snapshot"]
-            else:
-                incremental_dates = (dates_per_team or {}).get(team_id, [])
-                snapshot_mode = len(incremental_dates) == 0
-                paths_to_process = [f"event_date={d}" for d in incremental_dates]
+            try:
+                spark.read.parquet(clean_team_path)
+                snapshot_mode = False   # clean exists → incremental
+            except Exception:
+                snapshot_mode = True    # first run → snapshot
 
-        if not paths_to_process:
-            logger.warning(f"No paths to process for {dataset_name} | {team_id}, skipping.")
-            continue
+        # ------------------------------------------------------------------
+        # Determine paths to process
+        # ------------------------------------------------------------------
+        paths_to_process = []
 
+        if snapshot_mode:
+            paths_to_process.append("snapshot")
+        else:
+            incremental_dates = (dates_per_team or {}).get(team_id, [])
+            if not incremental_dates:
+                print(f"⚠️ No incremental dates for {dataset_name} | {team_id}, skipping.")
+                continue
+
+            for d in incremental_dates:
+                paths_to_process.append(f"event_date={d}")
+
+        # ------------------------------------------------------------------
+        # Process each path
+        # ------------------------------------------------------------------
         for p in paths_to_process:
             input_path = f"{raw_base_path}/team_id={team_id}/entity={dataset_name}/{p}/"
-            try:
-                logger.info(f"Processing {dataset_name} | {team_id} | {p}")
-                df = spark.read.parquet(input_path)
 
+            try:
+                print(f"📂 Processing {dataset_name} | {team_id} | {p}")
+                df = spark.read.parquet(input_path)
+              
+               # 1️⃣ Flatten structs & explode arrays FIRST
                 df = flatten_struct_columns(df)
+                
+        
+                # 2️⃣ Sanitize column names ONCE (after flattening)
                 df = sanitize_column_names(df)
+                
+                # 3️⃣ Fix NullType columns
                 df = fix_void_columns(df)
+                
+                # 4️⃣ Enforce schema (last, always)
                 df = enforce_schema(df, schema)
 
+                # -------------------- Source date logic --------------------
                 if p.startswith("event_date="):
-                    source_date_val = p.split("=")[1]
+                    source_date_val = p.split("=")[1]   # incremental
                 else:
+                    # snapshot → derive from data
                     if "actiondate" in df.columns:
-                        source_date_val = str(df.selectExpr("date(actiondate) as d").agg({"d": "max"}).collect()[0][0])
+                        source_date_val = df.selectExpr("date(actiondate) as d").agg({"d": "max"}).collect()[0][0]
                     elif "created" in df.columns:
-                        source_date_val = str(df.selectExpr("date(created) as d").agg({"d": "max"}).collect()[0][0])
+                        source_date_val = df.selectExpr("date(created) as d").agg({"d": "max"}).collect()[0][0]
                     else:
                         source_date_val = RUN_DATE
+                source_date_val = str(source_date_val)
 
+                # -------------------- Metadata --------------------
                 df = (
                     df.withColumn("team_id", lit(team_id))
                       .withColumn("source_date", lit(source_date_val))
+                      .withColumn("team_id_col", lit(team_id))
                       .withColumn("source_date_col", lit(source_date_val))
                       .withColumn("processing_timestamp", current_timestamp())
                       .withColumn("processing_date", current_date())
                       .withColumn("load_type", lit("snapshot" if snapshot_mode else "incremental"))
                 )
 
+                # -------------------- Deduplication --------------------
                 safe_keys = [k.replace(".", "_") for k in unique_keys]
                 df = df.dropDuplicates(safe_keys + ["team_id", "source_date"])
 
+                # -------------------- Write --------------------
                 write_mode = "overwrite" if snapshot_mode else "append"
-                df.write.mode(write_mode).partitionBy("source_date").parquet(entity_path)
+                df.write.mode(write_mode).partitionBy("team_id","source_date").parquet(entity_path)
 
-                logger.info(f"Written {df.count()} records for {dataset_name} | {team_id} | {p}")
+                print(f"✅ Written {df.count()} records for {dataset_name} | {team_id} | {p}")
 
             except Exception as e:
-                logger.error(f"Skipped {dataset_name} | {team_id} | {p}: {e}", exc_info=True)
+                print(f"⚠️ Skipped {dataset_name} | {team_id} | {p}: {e}")
+
 
 # ============================================================================
-# RUN ALL DATASETS
+# RUN
 # ============================================================================
-datasets = [
-    ("campaign", ["id", "messages_id"], CAMPAIGN_SCHEMA),
-    ("activity_open", ["id", "recipient.id", "campaign.id"], ACTIVITY_OPEN_SCHEMA),
-    ("activity_reply", ["id", "recipient.id", "campaign.id"], ACTIVITY_REPLY_SCHEMA),
-    ("activity_sent", ["id", "recipient.id", "campaign.id"], ACTIVITY_SENT_SCHEMA),
-    ("activity_clicks", ["id", "recipient.id", "campaign.id"], ACTIVITY_CLICKS_SCHEMA),
-    ("created_leads", ["id", "recipient.id", "campaign.id"], CREATED_LEADS_SCHEMA),
-]
 
-for dataset_name, unique_keys, schema in datasets:
+# # -------------------- campaign --------------------
+process_dataset(
+    RAW_PATH,
+    CLEAN_PATH,
+    TEAM_IDS,
+    "campaign",
+    unique_keys=["id", "messages_id"],
+    schema=CAMPAIGN_SCHEMA,
+    dates_per_team=None
+)
 
-    if dataset_name.startswith("campaign"):
-        process_dataset(
-            raw_base_path=RAW_PATH,
-            clean_base_path=CLEAN_PATH,
-            team_ids=TEAM_IDS,
-            dataset_name=dataset_name,
-            unique_keys=unique_keys,
-            schema=schema,
-            dates_per_team=None,
-            last_map=None
-        )
-    else:
-        dates_per_team, last_map = get_dates_to_process(
-            clean_path=f"{CLEAN_PATH}/entity={dataset_name}",
-            raw_base_path=RAW_PATH,
-            dataset_name=dataset_name,
-            team_ids=TEAM_IDS,
-            single_date=None
-        )
+# -------------------- activity_open --------------------
+dates_per_team = get_dates_to_process(
+    clean_path=f"{CLEAN_PATH}/entity=activity_open",
+    raw_base_path=RAW_PATH,
+    dataset_name="activity_open",
+    team_ids=TEAM_IDS,
+    single_date=None
+)
 
-        process_dataset(
-            raw_base_path=RAW_PATH,
-            clean_base_path=CLEAN_PATH,
-            team_ids=TEAM_IDS,
-            dataset_name=dataset_name,
-            unique_keys=unique_keys,
-            schema=schema,
-            dates_per_team=dates_per_team,
-            last_map=last_map
-        )
 
+process_dataset(
+    RAW_PATH,
+    CLEAN_PATH,
+    TEAM_IDS,
+    "activity_open",
+    unique_keys=["id", "recipient.id", "campaign.id"],
+    schema=ACTIVITY_OPEN_SCHEMA,
+    dates_per_team=dates_per_team
+)
+
+# -------------------- activity_reply --------------------
+dates_per_team = get_dates_to_process(
+    clean_path=f"{CLEAN_PATH}/entity=activity_reply",
+    raw_base_path=RAW_PATH,
+    dataset_name="activity_reply",
+    team_ids=TEAM_IDS,
+    single_date=None
+)
+
+
+process_dataset(
+    RAW_PATH,
+    CLEAN_PATH,
+    TEAM_IDS,
+    "activity_reply",
+    unique_keys=["id", "recipient.id", "campaign.id"],
+    schema=ACTIVITY_REPLY_SCHEMA,
+    dates_per_team=dates_per_team
+)
+
+# -------------------- activity_sent --------------------
+dates_per_team = get_dates_to_process(
+    clean_path=f"{CLEAN_PATH}/entity=activity_sent",
+    raw_base_path=RAW_PATH,
+    dataset_name="activity_sent",
+    team_ids=TEAM_IDS,
+    single_date=None
+)
+
+
+process_dataset(
+    RAW_PATH,
+    CLEAN_PATH,
+    TEAM_IDS,
+    "activity_sent",
+    unique_keys=["id", "recipient.id", "campaign.id"],
+    schema=ACTIVITY_SENT_SCHEMA,
+    dates_per_team=dates_per_team
+)
+
+# -------------------- activity_clicks --------------------
+dates_per_team = get_dates_to_process(
+    clean_path=f"{CLEAN_PATH}/entity=activity_clicks",
+    raw_base_path=RAW_PATH,
+    dataset_name="activity_clicks",
+    team_ids=TEAM_IDS,
+    single_date=None
+)
+
+
+process_dataset(
+    RAW_PATH,
+    CLEAN_PATH,
+    TEAM_IDS,
+    "activity_clicks",
+    unique_keys=["id", "recipient.id", "campaign.id"],
+    schema=ACTIVITY_CLICKS_SCHEMA,
+    dates_per_team=dates_per_team
+)
+# # -------------------- created_leads --------------------
+dates_per_team = get_dates_to_process(
+    clean_path=f"{CLEAN_PATH}/entity=created_leads",
+    raw_base_path=RAW_PATH,
+    dataset_name="created_leads",
+    team_ids=TEAM_IDS,
+    single_date=None
+)
+
+
+process_dataset(
+    RAW_PATH,
+    CLEAN_PATH,
+    TEAM_IDS,
+    "created_leads",
+    unique_keys=["id", "recipient.id", "campaign.id"],
+    schema=CREATED_LEADS_SCHEMA,
+    dates_per_team=dates_per_team
+)
 spark.stop()
-logger.info("All datasets processed successfully!")
+print("🎉 All datasets processed successfully!")

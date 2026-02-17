@@ -1,25 +1,14 @@
-# added logging
 # ============================================================================
 # IMPORTS
 # ============================================================================
 import json
 import time
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any
 import boto3
 import requests
 from requests.auth import HTTPBasicAuth
 import pandas as pd
-
-# ============================================================================
-# LOGGING CONFIG
-# ============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 # ============================================================================
 # GLOBALS
@@ -29,7 +18,7 @@ HEADERS = {"Content-Type": "application/json"}
 BUCKET = "mailshake-analytics"
 RAW_PREFIX = "raw"
 WATERMARK_PREFIX = "metadata/watermark"
-TEAMS_KEY = "config/teams_test2_sample.json"
+TEAMS_KEY = "config/teams_test3_sample.json"
 
 s3 = boto3.client("s3")
 RUN_DATE = datetime.utcnow().strftime("%Y-%m-%d")
@@ -72,10 +61,10 @@ def safe_post(url: str, payload: Dict[str, Any], auth: HTTPBasicAuth) -> request
     if resp.status_code == 429:
         endpoint = url.split("/")[-1]
         mode = "FIRST RUN" if is_first_run_mode else "INCREMENTAL"
-        logger.error("🚫 RATE LIMIT HIT")
-        logger.error(f"Endpoint: {endpoint}")
-        logger.error(f"Mode: {mode}")
-        logger.error(f"Rate: {rate:.1f} calls/min")
+        print("\n🚫 RATE LIMIT HIT")
+        print(f"Endpoint: {endpoint}")
+        print(f"Mode: {mode}")
+        print(f"Rate: {rate:.1f} calls/min")
         raise SystemExit(1)
 
     resp.raise_for_status()
@@ -138,7 +127,7 @@ def save_snapshot_or_incremental(
         key = f"{RAW_PREFIX}/team_id={team_id}/entity={entity}/snapshot/{entity}.parquet"
         df.to_parquet(file, index=False)
         s3.upload_file(file, BUCKET, key)
-        logger.info(f"✓ {entity}: {len(df)} records (FULL)")
+        print(f"✓ {entity}: {len(df)} records (FULL)")
         return df[ts_col].max() if ts_col in df.columns else batch_ts
 
     # FIRST RUN SNAPSHOT
@@ -147,7 +136,7 @@ def save_snapshot_or_incremental(
         key = f"{RAW_PREFIX}/team_id={team_id}/entity={entity}/snapshot/{entity}.parquet"
         df.to_parquet(file, index=False)
         s3.upload_file(file, BUCKET, key)
-        logger.info(f"✓ {entity}: {len(df)} records (SNAPSHOT 20d)")
+        print(f"✓ {entity}: {len(df)} records (SNAPSHOT 20d)")
         return df[ts_col].max()
 
     # INCREMENTAL
@@ -170,7 +159,7 @@ def save_snapshot_or_incremental(
         s3.upload_file(file, BUCKET, key)
         total += len(part)
 
-    logger.info(f"✓ {entity}: {total} records (INCREMENTAL)")
+    print(f"✓ {entity}: {total} records (INCREMENTAL)")
     return new_wm
 
 # ============================================================================
@@ -216,6 +205,8 @@ def fetch_activity_with_since(
             break
 
         payload = {"teamID": team_id, "nextToken": token, "perPage": 100}
+        if "since" in payload:
+            payload["since"] = payload.get("since")
 
     return results_all
 
@@ -250,7 +241,7 @@ def fetch_sent_activity(
                 continue
             try:
                 dt = datetime.fromisoformat(normalize_iso(ts))
-            except Exception:
+            except:
                 continue
             if dt >= cutoff:
                 results_all.append(r)
@@ -274,13 +265,12 @@ def fetch_sent_activity(
 def run_team(team: Dict[str, str]):
     global is_first_run_mode
 
-    team_id = team["team_id"]
-    auth = HTTPBasicAuth(team["api_token"], "")
-    logger.info(f"🚀 Team {team_id}")
+    team_id, auth = team["team_id"], HTTPBasicAuth(team["api_token"], "")
+    print(f"\n🚀 Team {team_id}")
 
     watermarks = read_watermarks(team_id)
     is_first_run_mode = len(watermarks) == 0
-    logger.info("🆕 FIRST RUN" if is_first_run_mode else "🔄 INCREMENTAL RUN")
+    print("🆕 FIRST RUN" if is_first_run_mode else "🔄 INCREMENTAL RUN")
 
     campaigns = fetch_campaigns(team_id, auth)
     if campaigns:
@@ -315,7 +305,7 @@ def run_team(team: Dict[str, str]):
         if new_wm:
             update_watermarks(team_id, {entity: new_wm})
 
-    logger.info(f"✅ Team {team_id} completed")
+    print(f"✅ Team {team_id} completed")
 
 # ============================================================================
 # MAIN
@@ -323,20 +313,22 @@ def run_team(team: Dict[str, str]):
 if __name__ == "__main__":
     teams = load_teams()
 
-    logger.info(f"Teams to process: {len(teams)}")
+    print(f"Teams to process: {len(teams)}")
 
     for _, team_cfg in teams.items():
         try:
             run_team(team_cfg)
         except SystemExit:
-            logger.error("🚫 RATE LIMIT — STOPPING")
+            print("🚫 RATE LIMIT — STOPPING")
             break
         except Exception as e:
-            logger.exception(f"❌ Team failed: {e}")
+            print(f"❌ Team failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     if start_time:
         elapsed = time.time() - start_time
-        logger.info("🏁 JOB FINISHED")
-        logger.info(f"Total API calls: {api_call_count}")
-        logger.info(f"Total time: {elapsed/60:.1f} min")
-        logger.info(f"Avg rate: {api_call_count/(elapsed/60):.1f} calls/min")
+        print(f"\n🏁 JOB FINISHED")
+        print(f"Total API calls: {api_call_count}")
+        print(f"Total time: {elapsed/60:.1f} min")
+        print(f"Avg rate: {api_call_count/(elapsed/60):.1f} calls/min")
